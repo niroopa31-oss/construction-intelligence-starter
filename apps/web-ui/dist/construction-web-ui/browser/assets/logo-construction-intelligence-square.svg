@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Square monogram icon (CI) for favicons and app icon: neon circle + CI monogram -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" preserveAspectRatio="xMidYMid meet">
+  <defs>
+    <linearGradient id="g1" x1="0" x2="1">
+      <stop offset="0%" stop-color="#00d2ff"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <filter id="glow2" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="6" result="b" />
+      <feMerge>
+        <feMergeNode in="b" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+    <style><![CDATA[
+      .mono { font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; font-weight: 800; }
+    ]]></style>
+  </defs>
+
+  <rect width="100%" height="100%" rx="42" fill="#010916" />
+
+  <circle cx="128" cy="110" r="78" fill="none" stroke="url(#g1)" stroke-width="10" filter="url(#glow2)" opacity="0.95" />
+
+  <g fill="url(#g1)" stroke="#fff" stroke-opacity="0.06" transform="translate(70,66)">
+    <text class="mono" x="10" y="78" font-size="76">CI</text>
+  </g>
+
+  <!-- tiny neural nodes -->
+  <circle cx="190" cy="66" r="4" fill="#6ef6ff" opacity="0.95" />
+  <circle cx="62" cy="184" r="3" fill="#ffa94d" opacity="0.9" />
+</svg>

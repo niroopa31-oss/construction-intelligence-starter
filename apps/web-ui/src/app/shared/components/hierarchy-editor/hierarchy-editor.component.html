@@ -1,0 +1,111 @@
+<section class="editor-shell">
+  <div class="tree-panel">
+    <div class="header-row">
+      <h2>{{ title }}</h2>
+      <button type="button" (click)="openAddChild(null)">Add root node</button>
+    </div>
+
+    <div class="inline-create" *ngIf="newNodeParentId() === null">
+      <input [(ngModel)]="newNode().name" placeholder="New stage or root task name" />
+      <select [(ngModel)]="newNode().nodeType">
+        <option value="stage">stage</option>
+        <option value="task">task</option>
+        <option value="sub_task">sub_task</option>
+        <option value="milestone">milestone</option>
+      </select>
+      <button type="button" (click)="submitNewNode()">Save</button>
+    </div>
+
+    <ng-container *ngTemplateOutlet="nodeTemplate; context: { $implicit: nodes, depth: 0 }"></ng-container>
+  </div>
+
+  <div class="detail-panel">
+    <ng-container *ngIf="selectedId() as id; else emptyState">
+      <h3>Edit node</h3>
+      <div class="form-grid" *ngIf="editModel()[id] as model">
+        <label>
+          <span>Name</span>
+          <input [(ngModel)]="model.name" />
+        </label>
+        <label>
+          <span>Type</span>
+          <select [(ngModel)]="model.nodeType">
+            <option value="stage">stage</option>
+            <option value="task">task</option>
+            <option value="sub_task">sub_task</option>
+            <option value="milestone">milestone</option>
+            <option value="summary">summary</option>
+          </select>
+        </label>
+        <label>
+          <span>Tower</span>
+          <input [(ngModel)]="model.tower" />
+        </label>
+        <label>
+          <span>Floor</span>
+          <input [(ngModel)]="model.floorName" />
+        </label>
+        <label>
+          <span>Phase</span>
+          <input [(ngModel)]="model.phase" />
+        </label>
+        <label>
+          <span>Move under</span>
+          <select [ngModel]="model.parentId" (ngModelChange)="requestMove(id, $event || null)">
+            <option [ngValue]="null">No parent (root)</option>
+            <option *ngFor="let option of flatten(nodes)" [ngValue]="option.id">{{ option.name }}</option>
+          </select>
+        </label>
+        <label>
+          <span>Start</span>
+          <input type="date" [(ngModel)]="model.baselineStart" />
+        </label>
+        <label>
+          <span>Finish</span>
+          <input type="date" [(ngModel)]="model.baselineFinish" />
+        </label>
+      </div>
+      <div class="detail-actions">
+        <button type="button" (click)="saveSelected()">Save changes</button>
+        <button type="button" class="secondary" (click)="openAddChild(id)">Add child</button>
+        <button type="button" class="warn" (click)="requestDelete(id, 'moveChildrenToParent')">Delete + keep children</button>
+        <button type="button" class="danger" (click)="requestDelete(id, 'cascade')">Delete branch</button>
+      </div>
+
+      <div class="inline-create" *ngIf="newNodeParentId() === id">
+        <input [(ngModel)]="newNode().name" placeholder="Child task name" />
+        <select [(ngModel)]="newNode().nodeType">
+          <option value="task">task</option>
+          <option value="sub_task">sub_task</option>
+          <option value="milestone">milestone</option>
+        </select>
+        <button type="button" (click)="submitNewNode()">Add child</button>
+      </div>
+    </ng-container>
+    <ng-template #emptyState>
+      <div class="empty-state">
+        <h3>Select a node</h3>
+        <p>Choose a stage, task, sub-task, or milestone to edit dates, type, parent, or delete strategy.</p>
+      </div>
+    </ng-template>
+  </div>
+</section>
+
+<ng-template #nodeTemplate let-items let-depth="depth">
+  <ul class="node-list">
+    <li *ngFor="let node of items" class="node-row">
+      <div class="node-card" [class.selected]="selectedId() === node.id" [style.marginLeft.px]="depth * 18">
+        <button type="button" class="twisty" (click)="toggle(node.id)">{{ isExpanded(node.id) ? '−' : '+' }}</button>
+        <button type="button" class="node-select" (click)="selectNode(node)">
+          <span class="node-title">{{ node.name }}</span>
+          <span class="node-meta">{{ node.nodeType }}<ng-container *ngIf="node.floorName"> · {{ node.floorName }}</ng-container></span>
+        </button>
+        <button type="button" class="micro" (click)="openAddChild(node.id)">Add child</button>
+        <button type="button" class="micro danger" (click)="requestDelete(node.id, 'leafOnly')">Delete</button>
+      </div>
+      <ng-container *ngIf="node.children?.length && isExpanded(node.id)">
+        <ng-container *ngTemplateOutlet="nodeTemplate; context: { $implicit: node.children, depth: depth + 1 }"></ng-container>
+      </ng-container>
+    </li>
+  </ul>
+</ng-template>

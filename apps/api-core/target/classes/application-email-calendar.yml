@@ -1,0 +1,23 @@
+spring:
+  mail:
+    host: smtp.office365.com
+    port: 587
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail.smtp.auth: true
+      mail.smtp.starttls.enable: true
+      mail.smtp.connectiontimeout: 5000
+      mail.smtp.timeout: 5000
+      mail.smtp.writetimeout: 5000
+
+app:
+  notifications:
+    mail:
+      enabled: ${MAIL_ENABLED:false}
+      from-address: ${MAIL_FROM_ADDRESS:no-reply@example.com}
+      from-name: ${MAIL_FROM_NAME:Construction Intelligence}
+    calendar:
+      organizer-email: ${CALENDAR_ORGANIZER_EMAIL:no-reply@example.com}
+      organizer-name: ${CALENDAR_ORGANIZER_NAME:Construction Intelligence}
+      timezone: ${CALENDAR_TIMEZONE:America/Toronto}

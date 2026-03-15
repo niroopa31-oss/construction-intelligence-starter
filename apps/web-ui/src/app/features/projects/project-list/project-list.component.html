@@ -1,0 +1,114 @@
+<section class="ci-page-shell">
+  <aside class="ci-sidebar">
+    <div class="ci-brand-block">
+      <div class="ci-logo-orb">
+        <span>CI</span>
+      </div>
+      <div>
+        <p class="ci-brand-title">Construction</p>
+        <p class="ci-brand-accent">Intelligence</p>
+      </div>
+    </div>
+
+    <nav class="ci-nav-list">
+      <a class="ci-nav-item ci-nav-item--active">Dashboard</a>
+      <a class="ci-nav-item">Task Hierarchy</a>
+      <a class="ci-nav-item">Contractors</a>
+      <a class="ci-nav-item">Meetings & Reminders</a>
+      <a class="ci-nav-item">Documents</a>
+      <a class="ci-nav-item">Settings</a>
+    </nav>
+
+    <div class="ci-sidebar-card">
+      <p class="ci-side-label">AI workspace</p>
+      <h3>1 client</h3>
+      <p>Lean hosting mode with a premium command-center UI.</p>
+    </div>
+  </aside>
+
+  <main class="ci-main-shell">
+    <header class="ci-topbar">
+      <div>
+        <p class="ci-eyebrow">AI powered construction insights</p>
+        <h1>Project Command Center</h1>
+      </div>
+
+      <div class="ci-top-actions">
+        <input class="ci-search" placeholder="Search projects, towers, contractors" />
+        <a class="ci-btn-primary" routerLink="/projects/import">Import Project</a>
+      </div>
+    </header>
+
+    <section class="ci-hero-panel">
+      <div class="ci-hero-copy">
+        <span class="ci-chip">Futuristic workspace</span>
+        <h2>Construction planning, monitoring, evidence, and AI recovery in one place.</h2>
+        <p>
+          Review imported Excel or XML plans, correct hierarchy, assign contractors, attach drawings,
+          track field images, and act on AI recommendations from a single control layer.
+        </p>
+        <div class="ci-hero-actions">
+          <a class="ci-btn-primary" routerLink="/projects/import">Start new import</a>
+          <a class="ci-btn-secondary" routerLink="/projects/1">Open live overview</a>
+        </div>
+      </div>
+
+      <div class="ci-hero-visual-frame">
+        <img src="assets/theme/hologram-city.svg" alt="Futuristic construction hologram city" />
+      </div>
+    </section>
+
+    <section class="ci-stats-grid">
+      <article class="ci-kpi-card" *ngFor="let stat of quickStats">
+        <p class="ci-kpi-label">{{ stat.label }}</p>
+        <h3>{{ stat.value }}</h3>
+        <p class="ci-kpi-sub">{{ stat.sub }}</p>
+      </article>
+    </section>
+
+    <section class="ci-section-head">
+      <div>
+        <p class="ci-eyebrow">Workspace projects</p>
+        <h2>Multi-project overview</h2>
+      </div>
+    </section>
+
+    <section class="ci-project-grid">
+      <article class="ci-project-card" *ngFor="let project of projects; let i = index">
+        <div class="ci-project-top">
+          <div>
+            <span class="ci-chip ci-chip--soft">{{ project.type }}</span>
+            <h3>{{ project.name }}</h3>
+          </div>
+          <span class="ci-status" [class.is-review]="project.status === 'Review'" [class.is-planning]="project.status === 'Planning'">{{ project.status }}</span>
+        </div>
+
+        <div class="ci-project-progress">
+          <div class="ci-progress-meta">
+            <span>Completion</span>
+            <strong>{{ project.progress }}%</strong>
+          </div>
+          <div class="ci-progress-track">
+            <span class="ci-progress-fill" [style.width.%]="project.progress"></span>
+          </div>
+        </div>
+
+        <div class="ci-project-metrics">
+          <div>
+            <p class="ci-mini-label">Delayed tasks</p>
+            <strong>{{ project.delayedTasks }}</strong>
+          </div>
+          <div>
+            <p class="ci-mini-label">Risk signal</p>
+            <strong>{{ project.risk }}</strong>
+          </div>
+        </div>
+
+        <div class="ci-card-actions">
+          <a class="ci-btn-secondary" [routerLink]="['/projects', i + 1]">Open project</a>
+          <button class="ci-btn-ghost" type="button">AI summary</button>
+        </div>
+      </article>
+    </section>
+  </main>
+</section>

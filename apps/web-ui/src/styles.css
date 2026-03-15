@@ -1,0 +1,65 @@
+:root {
+  --ci-bg-app: #03091a;
+  --ci-bg-elevated: #071225;
+  --ci-text-primary: #f4f8ff;
+  --ci-text-secondary: #93a7c2;
+  --ci-text-dim: #6e84a3;
+  --ci-accent-blue: #2ed0ff;
+  --ci-accent-blue-deep: #0b4dff;
+  --ci-accent-orange: #ff9a1f;
+  --ci-success: #21d59b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  font-family: Inter, Arial, Helvetica, sans-serif;
+  background:
+    radial-gradient(circle at 20% 16%, rgba(0, 174, 239, 0.18), transparent 24%),
+    radial-gradient(circle at 78% 12%, rgba(255, 154, 31, 0.12), transparent 16%),
+    radial-gradient(circle at 52% 72%, rgba(11, 77, 255, 0.12), transparent 26%),
+    linear-gradient(180deg, #040b1d 0%, #020611 100%);
+  color: var(--ci-text-primary);
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(46, 208, 255, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(46, 208, 255, 0.06) 1px, transparent 1px);
+  background-size: 42px 42px;
+  opacity: 0.18;
+}
+
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.22;
+  background:
+    radial-gradient(circle at 10% 30%, rgba(46, 208, 255, 0.32) 0 1px, transparent 2px),
+    radial-gradient(circle at 24% 72%, rgba(255, 255, 255, 0.22) 0 1px, transparent 2px),
+    radial-gradient(circle at 70% 38%, rgba(46, 208, 255, 0.28) 0 1px, transparent 2px),
+    radial-gradient(circle at 86% 70%, rgba(255, 179, 71, 0.18) 0 1px, transparent 2px);
+  background-size: 220px 220px, 280px 280px, 240px 240px, 300px 300px;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+a {
+  color: inherit;
+}

@@ -1,0 +1,128 @@
+<section class="page">
+
+  <div class="page-header">
+    <div>
+      <h1>Import Project</h1>
+      <p>Upload XML or Excel, review the generated hierarchy, and correct anything before saving the project.</p>
+    </div>
+  </div>
+
+  <!-- ── Step 1 — File upload zone ── -->
+  <div class="upload-zone"
+       *ngIf="!draft()"
+       [class.drag-over]="isDragOver()"
+       (dragover)="onDragOver($event)"
+       (dragleave)="onDragLeave($event)"
+       (drop)="onDrop($event)"
+       (click)="fileInput.click()">
+
+    <input #fileInput type="file"
+           accept=".xml,.xlsx,.xls,.xlsm"
+           hidden
+           (change)="onFileSelected($event)" />
+
+    <div class="upload-icon">📂</div>
+
+    <div *ngIf="!uploading() && !selectedFile()" class="upload-text">
+      <span class="upload-title">Drag &amp; drop your project file here</span>
+      <span class="upload-hint">or click to browse — Supports
+        <strong>.xlsx</strong>, <strong>.xls</strong>,
+        <strong>.xlsm</strong>, <strong>.xml</strong>
+      </span>
+    </div>
+
+    <div *ngIf="selectedFile() && !uploading()" class="upload-text">
+      <span class="upload-title">{{ selectedFile()!.name }}</span>
+      <span class="upload-hint">{{ formatFileSize(selectedFile()!.size) }} — Ready to upload</span>
+    </div>
+
+    <div *ngIf="uploading()" class="upload-text">
+      <span class="upload-title">⏳ Parsing file…</span>
+      <span class="upload-hint">The AI service is analysing your schedule. This may take a moment.</span>
+      <div class="progress-bar"><div class="progress-bar-inner"></div></div>
+    </div>
+  </div>
+
+  <!-- ── Toolbar before upload ── -->
+  <div class="toolbar" *ngIf="!draft()">
+    <label>Project Name
+      <input [(ngModel)]="projectNameOverride" placeholder="Auto-detected from file" />
+    </label>
+    <label>Project Type
+      <select [(ngModel)]="projectTypeSelected">
+        <option value="high-rise residential">High-rise Residential</option>
+        <option value="villa project">Villa Project</option>
+        <option value="commercial building">Commercial Building</option>
+        <option value="interior fit-out">Interior Fit-out</option>
+        <option value="general construction">General Construction</option>
+      </select>
+    </label>
+    <button type="button" class="primary"
+            [disabled]="!selectedFile() || uploading()"
+            (click)="uploadFile()">
+      🚀 Upload &amp; Parse
+    </button>
+    <span class="divider"></span>
+    <label>Or paste Draft ID
+      <input [(ngModel)]="draftId" placeholder="e.g. 3fa85f64-…" />
+    </label>
+    <button type="button" (click)="loadDraft()" [disabled]="!draftId.trim()">Load draft</button>
+  </div>
+
+  <!-- ── Preview card ── -->
+  <div class="preview-card" *ngIf="previewResult() && !draft()">
+    <h3>📋 Parse Result</h3>
+    <div class="preview-stats">
+      <div class="stat">
+        <span class="stat-val">{{ previewResult()!.draftProjectName || previewResult()!.filename }}</span>
+        <span class="stat-lbl">Project</span>
+      </div>
+      <div class="stat">
+        <span class="stat-val">{{ previewResult()!.draftNodeCount || previewResult()!.preview?.task_count || '—' }}</span>
+        <span class="stat-lbl">Tasks</span>
+      </div>
+      <div class="stat" *ngIf="previewResult()!.preview?.project_type">
+        <span class="stat-val">{{ previewResult()!.preview?.project_type }}</span>
+        <span class="stat-lbl">Type (AI)</span>
+      </div>
+    </div>
+    <div class="preview-warnings" *ngIf="previewResult()!.preview?.warnings?.length">
+      <strong>⚠️ Warnings:</strong>
+      <ul><li *ngFor="let w of previewResult()!.preview!.warnings">{{ w }}</li></ul>
+    </div>
+    <button class="primary" *ngIf="previewResult()!.draftCreated" (click)="loadCreatedDraft()">
+      ✅ Review hierarchy
+    </button>
+  </div>
+
+  <!-- ── Status bar ── -->
+  <div class="status" *ngIf="message()">{{ message() }}</div>
+
+  <!-- ── Toolbar when draft loaded ── -->
+  <div class="toolbar" *ngIf="draft()">
+    <label>Project Type
+      <select [(ngModel)]="projectTypeSelected">
+        <option value="high-rise residential">High-rise Residential</option>
+        <option value="villa project">Villa Project</option>
+        <option value="commercial building">Commercial Building</option>
+        <option value="interior fit-out">Interior Fit-out</option>
+        <option value="general construction">General Construction</option>
+      </select>
+    </label>
+    <button type="button" class="primary" (click)="confirmDraft()">✅ Create project</button>
+    <button type="button" (click)="resetWizard()">↩ Start over</button>
+  </div>
+
+  <!-- ── Hierarchy editor ── -->
+  <app-hierarchy-editor
+    *ngIf="draft() as currentDraft"
+    [title]="'Hierarchy review for ' + currentDraft.projectName"
+    [nodes]="currentDraft.tree"
+    mode="draft"
+    (addChild)="onAddDraftNode($event.parentId, $event.payload)"
+    (updateNode)="onUpdateDraftNode($event.nodeId, $event.payload)"
+    (moveNode)="onMoveDraftNode($event.nodeId, $event.newParentId)"
+    (deleteNode)="onDeleteDraftNode($event.nodeId, $event.strategy)"
+  ></app-hierarchy-editor>
+
+</section>

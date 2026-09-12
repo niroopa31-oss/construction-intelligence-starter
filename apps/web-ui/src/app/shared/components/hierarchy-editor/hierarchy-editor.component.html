@@ -53,7 +53,7 @@
           <span>Move under</span>
           <select [ngModel]="model.parentId" (ngModelChange)="requestMove(id, $event || null)">
             <option [ngValue]="null">No parent (root)</option>
-            <option *ngFor="let option of flatten(nodes)" [ngValue]="option.id">{{ option.name }}</option>
+            <option *ngFor="let option of flatNodes()" [ngValue]="option.id">{{ option.name }}</option>
           </select>
         </label>
         <label>

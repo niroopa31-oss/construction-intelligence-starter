@@ -8,7 +8,8 @@ import {
   CreateReminderRequest,
   ProjectSummaryResponse,
   TaskDetailResponse,
-  TaskTreeNode
+  TaskTreeNode,
+  AiSummaryResponse
 } from '../models/task-tree.models';
 
 @Injectable({ providedIn: 'root' })
@@ -54,5 +55,13 @@ export class ProjectTaskApiService {
 
   sendReminder(projectId: string, taskId: string, reminderId: string): Observable<TaskDetailResponse> {
     return this.http.post<TaskDetailResponse>(`${this.baseUrl}/${projectId}/tasks/${taskId}/collaboration/reminders/${reminderId}/send`, {});
+  }
+
+  updateTask(projectId: string, taskId: string, updates: Record<string, unknown>): Observable<TaskDetailResponse> {
+    return this.http.patch<TaskDetailResponse>(`${this.baseUrl}/${projectId}/tasks/${taskId}`, updates);
+  }
+
+  getAiSummary(projectId: string): Observable<any> {
+    return this.http.get(`/api/projects/${projectId}/ai-summary`);
   }
 }

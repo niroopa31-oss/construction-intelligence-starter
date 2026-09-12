@@ -5,7 +5,7 @@ import { ProjectOverviewComponent } from './features/projects/project-overview/p
 
 export const routes: Routes = [
   { path: '', component: ProjectListComponent },
-  { path: 'projects', component: ProjectListComponent },
+  { path: 'projects', component: ProjectListComponent, pathMatch: 'full' },
   { path: 'projects/import', component: ProjectImportWizardComponent },
   { path: 'projects/:id', component: ProjectOverviewComponent },
   { path: '**', redirectTo: '' },

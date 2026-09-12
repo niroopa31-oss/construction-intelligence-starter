@@ -89,6 +89,43 @@ public class TaskTreeService {
         return new TaskDetailDto(target.getId(), target.getProjectId(), target.getParentId(), target.getName(), target.getNodeType(), target.getPhase(), target.getDiscipline(), target.getTower(), target.getFloorName(), target.getZoneName(), target.getBaselineStart(), target.getBaselineFinish(), target.getActualStart(), target.getActualFinish(), target.getForecastFinish(), target.getProgressPercent(), target.getPlannedQty(), target.getActualQty(), target.getUom(), target.isCriticalFlag(), target.getConfidenceScore(), status, TaskViewLogic.delayedDays(target), path, contractorNames, List.of(), List.of(), List.of(), aiSuggestions, assignmentDtos, contractorOptions, meetings, reminders);
     }
 
+    @org.springframework.transaction.annotation.Transactional
+    public TaskDetailDto updateTask(UUID projectId, UUID taskId, Map<String, Object> updates) {
+        Task task = taskRepository.findById(taskId)
+                .filter(t -> t.getProjectId().equals(projectId))
+                .orElseThrow(() -> new NoSuchElementException("Task not found"));
+
+        if (updates.containsKey("name")) task.setName((String) updates.get("name"));
+        if (updates.containsKey("phase")) task.setPhase((String) updates.get("phase"));
+        if (updates.containsKey("discipline")) task.setDiscipline((String) updates.get("discipline"));
+        if (updates.containsKey("tower")) task.setTower((String) updates.get("tower"));
+        if (updates.containsKey("floorName")) task.setFloorName((String) updates.get("floorName"));
+        if (updates.containsKey("zoneName")) task.setZoneName((String) updates.get("zoneName"));
+        if (updates.containsKey("baselineStart")) task.setBaselineStart(parseDate(updates.get("baselineStart")));
+        if (updates.containsKey("baselineFinish")) task.setBaselineFinish(parseDate(updates.get("baselineFinish")));
+        if (updates.containsKey("actualStart")) task.setActualStart(parseDate(updates.get("actualStart")));
+        if (updates.containsKey("actualFinish")) task.setActualFinish(parseDate(updates.get("actualFinish")));
+        if (updates.containsKey("forecastFinish")) task.setForecastFinish(parseDate(updates.get("forecastFinish")));
+        if (updates.containsKey("plannedQty")) task.setPlannedQty(parseBigDecimal(updates.get("plannedQty")));
+        if (updates.containsKey("actualQty")) task.setActualQty(parseBigDecimal(updates.get("actualQty")));
+        if (updates.containsKey("uom")) task.setUom((String) updates.get("uom"));
+        if (updates.containsKey("progressPercent")) task.setProgressPercent(parseBigDecimal(updates.get("progressPercent")));
+        if (updates.containsKey("criticalFlag")) task.setCriticalFlag(Boolean.TRUE.equals(updates.get("criticalFlag")));
+
+        taskRepository.save(task);
+        return taskDetail(projectId, taskId);
+    }
+
+    private LocalDate parseDate(Object value) {
+        if (value == null || "".equals(value)) return null;
+        return LocalDate.parse(value.toString());
+    }
+
+    private BigDecimal parseBigDecimal(Object value) {
+        if (value == null || "".equals(value)) return null;
+        return new BigDecimal(value.toString());
+    }
+
     private Map<UUID, List<String>> contractorNamesByTask(List<Task> tasks) {
         UUID projectId = tasks.stream().findFirst().map(Task::getProjectId).orElse(null);
         Map<UUID, String> contractorNameMap = projectId == null ? Map.of() : contractorRepository.findByProjectIdOrderByCompanyNameAsc(projectId).stream().collect(Collectors.toMap(Contractor::getId, Contractor::getCompanyName));

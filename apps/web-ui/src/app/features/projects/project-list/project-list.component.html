@@ -66,6 +66,16 @@
       </article>
     </section>
 
+    <div *ngIf="error" class="ci-error-banner">
+      <div class="ci-error-inner">
+        <strong>Error loading projects</strong>
+        <p>{{ error }}</p>
+        <div>
+          <button class="ci-btn-primary" (click)="loadProjects()">Retry</button>
+        </div>
+      </div>
+    </div>
+
     <section class="ci-section-head">
       <div>
         <p class="ci-eyebrow">Workspace projects</p>
@@ -73,7 +83,46 @@
       </div>
     </section>
 
-    <section class="ci-project-grid">
+    <!-- loading skeleton shown while projects are being fetched -->
+    <section class="ci-project-grid" *ngIf="loading">
+      <article class="ci-project-card ci-skeleton" *ngFor="let n of [1,2,3]">
+        <div class="ci-project-top">
+          <div>
+            <span class="ci-chip ci-chip--soft ci-skeleton-line">&nbsp;</span>
+            <h3 class="ci-skeleton-line">&nbsp;</h3>
+          </div>
+          <span class="ci-status ci-skeleton-line">&nbsp;</span>
+        </div>
+
+        <div class="ci-project-progress">
+          <div class="ci-progress-meta">
+            <span class="ci-skeleton-line">&nbsp;</span>
+            <strong class="ci-skeleton-line">&nbsp;</strong>
+          </div>
+          <div class="ci-progress-track">
+            <span class="ci-progress-fill" style="width:30%"></span>
+          </div>
+        </div>
+
+        <div class="ci-project-metrics">
+          <div>
+            <p class="ci-mini-label ci-skeleton-line">&nbsp;</p>
+            <strong class="ci-skeleton-line">&nbsp;</strong>
+          </div>
+          <div>
+            <p class="ci-mini-label ci-skeleton-line">&nbsp;</p>
+            <strong class="ci-skeleton-line">&nbsp;</strong>
+          </div>
+        </div>
+
+        <div class="ci-card-actions">
+          <a class="ci-btn-secondary ci-skeleton-line">&nbsp;</a>
+          <button class="ci-btn-ghost ci-skeleton-line" type="button">&nbsp;</button>
+        </div>
+      </article>
+    </section>
+
+    <section class="ci-project-grid" *ngIf="projects && projects.length > 0; else noProjects">
       <article class="ci-project-card" *ngFor="let project of projects; let i = index">
         <div class="ci-project-top">
           <div>
@@ -105,10 +154,26 @@
         </div>
 
         <div class="ci-card-actions">
-          <a class="ci-btn-secondary" [routerLink]="['/projects', i + 1]">Open project</a>
+       <a class="ci-btn-secondary"
+         [routerLink]="['/projects', project.projectId]"
+         [queryParams]="{ projectId: project.projectId }"
+       >Open project</a>
           <button class="ci-btn-ghost" type="button">AI summary</button>
         </div>
       </article>
     </section>
+
+    <ng-template #noProjects>
+      <section class="ci-empty-state">
+        <div class="ci-empty-inner">
+          <h3>No projects found</h3>
+          <p>There are no projects in the workspace yet. Import a project or create one to get started.</p>
+          <div class="ci-hero-actions">
+            <a class="ci-btn-primary" routerLink="/projects/import">Import Project</a>
+            <a class="ci-btn-secondary" routerLink="/projects/new">Create project</a>
+          </div>
+        </div>
+      </section>
+    </ng-template>
   </main>
 </section>

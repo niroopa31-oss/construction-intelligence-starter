@@ -21,6 +21,7 @@
 /Users/niru/Downloads/construction-intelligence-starter/apps/api-core/src/main/java/com/example/construction/projects/ProjectRepository.java
 /Users/niru/Downloads/construction-intelligence-starter/apps/api-core/src/main/java/com/example/construction/reminders/TaskReminder.java
 /Users/niru/Downloads/construction-intelligence-starter/apps/api-core/src/main/java/com/example/construction/reminders/TaskReminderRepository.java
+/Users/niru/Downloads/construction-intelligence-starter/apps/api-core/src/main/java/com/example/construction/tasks/AiSummaryService.java
 /Users/niru/Downloads/construction-intelligence-starter/apps/api-core/src/main/java/com/example/construction/tasks/ProjectSummaryDto.java
 /Users/niru/Downloads/construction-intelligence-starter/apps/api-core/src/main/java/com/example/construction/tasks/Task.java
 /Users/niru/Downloads/construction-intelligence-starter/apps/api-core/src/main/java/com/example/construction/tasks/TaskAssignment.java
@@ -31,6 +32,7 @@
 /Users/niru/Downloads/construction-intelligence-starter/apps/api-core/src/main/java/com/example/construction/tasks/TaskController.java
 /Users/niru/Downloads/construction-intelligence-starter/apps/api-core/src/main/java/com/example/construction/tasks/TaskDetailDto.java
 /Users/niru/Downloads/construction-intelligence-starter/apps/api-core/src/main/java/com/example/construction/tasks/TaskRepository.java
+/Users/niru/Downloads/construction-intelligence-starter/apps/api-core/src/main/java/com/example/construction/tasks/TaskService.java
 /Users/niru/Downloads/construction-intelligence-starter/apps/api-core/src/main/java/com/example/construction/tasks/TaskSummaryDto.java
 /Users/niru/Downloads/construction-intelligence-starter/apps/api-core/src/main/java/com/example/construction/tasks/TaskTreeService.java
 /Users/niru/Downloads/construction-intelligence-starter/apps/api-core/src/main/java/com/example/construction/tasks/TaskViewLogic.java

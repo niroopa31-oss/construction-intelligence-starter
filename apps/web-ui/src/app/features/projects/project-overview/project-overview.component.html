@@ -1,0 +1,411 @@
+<section class="page" *ngIf="!loading(); else loadingTpl">
+
+  <!-- ── Summary row ── -->
+  <div class="summary-grid" *ngIf="summary() as s">
+    <div class="stat"><strong>{{ s.totalTasks }}</strong><span>Total Tasks</span></div>
+    <div class="stat"><strong>{{ s.completedTasks }}</strong><span>Completed</span></div>
+    <div class="stat"><strong>{{ s.delayedTasks }}</strong><span>Delayed</span></div>
+    <div class="stat"><strong>{{ s.highRiskCount }}</strong><span>High Risk</span></div>
+    <div class="stat"><strong>{{ s.milestoneCount }}</strong><span>Milestones</span></div>
+    <div class="stat accent"><strong>{{ s.overallProgress | number:'1.0-0' }}%</strong><span>Progress</span></div>
+    <div class="stat ai-btn-cell">
+      <button class="ai-summary-btn" (click)="openAiSummary()" [disabled]="aiLoading()">
+        <span class="ai-icon">✦</span>
+        {{ aiLoading() ? 'Generating…' : 'AI Summary' }}
+      </button>
+    </div>
+  </div>
+
+  <!-- ── AI Summary Modal ── -->
+  <div class="modal-backdrop" *ngIf="showAiSummary()" (click)="closeAiSummary()">
+    <div class="modal-panel" (click)="$event.stopPropagation()">
+
+      <div class="modal-header">
+        <span class="ai-icon-lg">✦</span>
+        <h2>AI Project Summary</h2>
+        <button class="close-btn" (click)="closeAiSummary()">✕</button>
+      </div>
+
+      <div class="modal-loading" *ngIf="aiLoading()">
+        <span class="spinner"></span> Generating summary…
+      </div>
+
+      <div class="modal-error" *ngIf="aiError()">{{ aiError() }}</div>
+
+      <ng-container *ngIf="aiSummary() as s">
+
+        <div class="narrative" [innerHTML]="boldify(s.summary_text)"></div>
+
+        <div class="risk-row">
+          <span class="label">Risk Level</span>
+          <span class="risk-badge" [ngClass]="'risk--' + s.risk.level">{{ s.risk.level | uppercase }}</span>
+          <span class="risk-reason">{{ s.risk.reasons[0] }}</span>
+        </div>
+
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <span class="metric-val">{{ s.metrics.total_towers }}</span>
+            <span class="metric-lbl">Towers</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-val">{{ s.metrics.total_floors }}</span>
+            <span class="metric-lbl">Floors</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-val">{{ s.metrics.total_activities }}</span>
+            <span class="metric-lbl">Activities</span>
+          </div>
+          <div class="metric-card" [class.metric-warn]="s.metrics.delayed_count > 0">
+            <span class="metric-val">{{ s.metrics.delayed_count }}</span>
+            <span class="metric-lbl">Delayed</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-val">{{ s.metrics.upcoming_30_days }}</span>
+            <span class="metric-lbl">Due (30d)</span>
+          </div>
+          <div class="metric-card">
+            <span class="metric-val">{{ s.metrics.duration_days ?? '—' }}{{ s.metrics.duration_days ? 'd' : '' }}</span>
+            <span class="metric-lbl">Duration</span>
+          </div>
+        </div>
+
+        <!-- Phase breakdown -->
+        <div class="section-block" *ngIf="phaseEntries(s).length">
+          <h4 class="block-title">Phase Breakdown</h4>
+          <div class="phase-row" *ngFor="let p of phaseEntries(s)">
+            <span class="phase-name">{{ p[0] | titlecase }}</span>
+            <div class="bar-track">
+              <div class="bar-fill" [style.width.%]="pct(p[1], s.metrics.total_activities)"></div>
+            </div>
+            <span class="phase-count">{{ p[1] }} ({{ pct(p[1], s.metrics.total_activities) }}%)</span>
+          </div>
+        </div>
+
+        <!-- Tower stats -->
+        <div class="section-block" *ngIf="s.tower_stats.length">
+          <h4 class="block-title">Tower Overview</h4>
+          <div class="tower-row" *ngFor="let t of s.tower_stats">
+            <span class="tower-name">{{ t.tower }}</span>
+            <span class="tower-meta">{{ t.floors }} floors</span>
+            <span class="tower-meta">{{ t.activities }} activities</span>
+            <span class="tower-delayed warn-text" *ngIf="t.delayed > 0">⚠ {{ t.delayed }} delayed</span>
+            <span class="tower-ok" *ngIf="t.delayed === 0">✓ On track</span>
+            <span class="tower-meta dim">{{ t.planned_finish ?? '—' }}</span>
+          </div>
+        </div>
+
+        <!-- Delayed activities -->
+        <div class="section-block" *ngIf="s.delayed_activities.length">
+          <h4 class="block-title warn-text">Delayed Activities ({{ s.delayed_activities.length }})</h4>
+          <div class="delayed-row" *ngFor="let a of s.delayed_activities">
+            <span class="act-name">{{ a.name }}</span>
+            <span class="act-meta">{{ a.tower }} · {{ a.floor }}</span>
+            <span class="warn-text">{{ a.days_overdue }}d overdue</span>
+          </div>
+        </div>
+
+        <!-- Upcoming milestones -->
+        <div class="section-block" *ngIf="s.upcoming_milestones.length">
+          <h4 class="block-title">Upcoming Milestones</h4>
+          <div class="milestone-row" *ngFor="let m of s.upcoming_milestones">
+            <span class="act-name">{{ m.name }}</span>
+            <span class="act-meta">{{ m.tower }}</span>
+            <span class="accent-text">{{ m.planned_finish }} ({{ m.days_away }}d)</span>
+          </div>
+        </div>
+
+      </ng-container>
+    </div>
+  </div>
+
+  <!-- ── Main grid ── -->
+  <div class="editor-shell">
+
+    <!-- Tree panel -->
+    <div class="tree-panel">
+      <div class="header-row">
+        <h2>Task Hierarchy</h2>
+      </div>
+      <div class="tree-search">
+        <input placeholder="Filter tasks…" [(ngModel)]="filterText" />
+      </div>
+      <ng-container *ngTemplateOutlet="nodeTemplate; context: { $implicit: tree(), depth: 0 }"></ng-container>
+      <div *ngIf="tree().length === 0" class="empty-tree">
+        <p>No tasks found for this project.</p>
+      </div>
+    </div>
+
+    <!-- Detail panel -->
+    <div class="detail-panel">
+      <ng-container *ngIf="detail() as d; else emptyState">
+
+        <div class="detail-header">
+          <span class="badge" [ngClass]="'badge--' + d.status">{{ d.status }}</span>
+          <h3>{{ d.name }}</h3>
+          <p class="breadcrumb">{{ d.path.join(' › ') }}</p>
+        </div>
+
+        <!-- Details -->
+        <div class="section">
+          <h4>Details</h4>
+          <div class="info-grid">
+            <div><span class="label">Type</span><span>{{ d.nodeType }}</span></div>
+            <div><span class="label">Phase</span><span>{{ d.phase || '—' }}</span></div>
+            <div><span class="label">Discipline</span><span>{{ d.discipline || '—' }}</span></div>
+            <div><span class="label">Tower</span><span>{{ d.tower || '—' }}</span></div>
+            <div><span class="label">Floor</span><span>{{ d.floorName || '—' }}</span></div>
+            <div><span class="label">Zone</span><span>{{ d.zoneName || '—' }}</span></div>
+          </div>
+        </div>
+
+        <!-- Schedule -->
+        <div class="section">
+          <h4>
+            Schedule
+            <button class="micro edit-toggle" (click)="editingSchedule = !editingSchedule">
+              {{ editingSchedule ? 'Cancel' : 'Edit' }}
+            </button>
+          </h4>
+          <div class="info-grid" *ngIf="!editingSchedule">
+            <div><span class="label">Baseline Start</span><span>{{ d.baselineStart || '—' }}</span></div>
+            <div><span class="label">Baseline Finish</span><span>{{ d.baselineFinish || '—' }}</span></div>
+            <div><span class="label">Actual Start</span><span>{{ d.actualStart || '—' }}</span></div>
+            <div><span class="label">Actual Finish</span><span>{{ d.actualFinish || '—' }}</span></div>
+            <div><span class="label">Forecast Finish</span><span>{{ d.forecastFinish || '—' }}</span></div>
+            <div *ngIf="d.delayedDays > 0" class="delay-chip">
+              <span class="label">Delayed</span><span class="warn-text">{{ d.delayedDays }} days</span>
+            </div>
+          </div>
+          <div class="edit-grid" *ngIf="editingSchedule">
+            <label class="edit-field">
+              <span class="label">Baseline Start</span>
+              <input type="date" [ngModel]="editDates.baselineStart" (ngModelChange)="editDates.baselineStart = $event" />
+            </label>
+            <label class="edit-field">
+              <span class="label">Baseline Finish</span>
+              <input type="date" [ngModel]="editDates.baselineFinish" (ngModelChange)="editDates.baselineFinish = $event" />
+            </label>
+            <label class="edit-field">
+              <span class="label">Actual Start</span>
+              <input type="date" [ngModel]="editDates.actualStart" (ngModelChange)="editDates.actualStart = $event" />
+            </label>
+            <label class="edit-field">
+              <span class="label">Actual Finish</span>
+              <input type="date" [ngModel]="editDates.actualFinish" (ngModelChange)="editDates.actualFinish = $event" />
+            </label>
+            <label class="edit-field">
+              <span class="label">Forecast Finish</span>
+              <input type="date" [ngModel]="editDates.forecastFinish" (ngModelChange)="editDates.forecastFinish = $event" />
+            </label>
+            <div class="edit-actions">
+              <button class="micro save" (click)="saveSchedule()" [disabled]="saving()">
+                {{ saving() ? 'Saving…' : 'Save schedule' }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Progress -->
+        <div class="section">
+          <h4>
+            Progress
+            <button class="micro edit-toggle" (click)="editingProgress = !editingProgress">
+              {{ editingProgress ? 'Cancel' : 'Edit' }}
+            </button>
+          </h4>
+          <div *ngIf="!editingProgress">
+            <div class="info-grid">
+              <div><span class="label">Completion</span><strong>{{ d.progressPercent ?? 0 }}%</strong></div>
+              <div><span class="label">Planned Qty</span><span>{{ d.plannedQty ?? '—' }}</span></div>
+              <div><span class="label">Actual Qty</span><span>{{ d.actualQty ?? '—' }}</span></div>
+              <div><span class="label">UOM</span><span>{{ d.uom || '—' }}</span></div>
+              <div><span class="label">Critical</span><span>{{ d.criticalFlag ? 'Yes' : 'No' }}</span></div>
+              <div><span class="label">Confidence</span><span>{{ d.confidenceScore ?? '—' }}</span></div>
+            </div>
+            <div class="progress-bar">
+              <div class="progress-fill" [style.width.%]="d.progressPercent ?? 0"></div>
+            </div>
+          </div>
+          <div class="edit-grid" *ngIf="editingProgress">
+            <label class="edit-field">
+              <span class="label">Completion %</span>
+              <input type="number" min="0" max="100" step="1" [(ngModel)]="editProgress.progressPercent" />
+            </label>
+            <label class="edit-field">
+              <span class="label">Planned Qty</span>
+              <input type="number" step="0.01" [(ngModel)]="editProgress.plannedQty" />
+            </label>
+            <label class="edit-field">
+              <span class="label">Actual Qty</span>
+              <input type="number" step="0.01" [(ngModel)]="editProgress.actualQty" />
+            </label>
+            <label class="edit-field">
+              <span class="label">UOM</span>
+              <input type="text" [(ngModel)]="editProgress.uom" />
+            </label>
+            <label class="edit-field check-row">
+              <input type="checkbox" [(ngModel)]="editProgress.criticalFlag" />
+              <span>Critical path task</span>
+            </label>
+            <div class="edit-actions">
+              <button class="micro save" (click)="saveProgress()" [disabled]="saving()">
+                {{ saving() ? 'Saving…' : 'Save progress' }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Contractors -->
+        <div class="section">
+          <h4>Contractors ({{ d.contractorAssignments.length || 0 }})</h4>
+          <div *ngIf="d.contractorAssignments.length" class="card-list">
+            <div class="mini-card" *ngFor="let a of d.contractorAssignments">
+              <div>
+                <strong>{{ a.companyName }}</strong>
+                <span class="sub" *ngIf="a.contactName"> · {{ a.contactName }}</span>
+                <span class="sub" *ngIf="a.email"> · {{ a.email }}</span>
+                <span class="sub" *ngIf="a.roleName"> — {{ a.roleName }}</span>
+              </div>
+              <button class="micro danger" (click)="removeAssignment(a.id)">Remove</button>
+            </div>
+          </div>
+          <div *ngIf="!d.contractorAssignments.length" class="hint">No contractors assigned.</div>
+          <details class="action-fold">
+            <summary>Assign contractor</summary>
+            <div class="inline-form">
+              <select [(ngModel)]="newAssignment.contractorId">
+                <option value="">Select contractor…</option>
+                <option *ngFor="let c of d.availableContractors" [value]="c.id">
+                  {{ c.companyName }} ({{ c.tradeType || 'general' }})
+                </option>
+              </select>
+              <input placeholder="Role (optional)" [(ngModel)]="newAssignment.roleName" />
+              <button (click)="assignContractor()">Assign</button>
+            </div>
+          </details>
+        </div>
+
+        <!-- Meetings -->
+        <div class="section">
+          <h4>Meetings ({{ d.meetings.length || 0 }})</h4>
+          <div *ngIf="d.meetings.length" class="card-list">
+            <div class="mini-card" *ngFor="let m of d.meetings">
+              <div>
+                <strong>{{ m.title }}</strong>
+                <span class="sub" *ngIf="m.startTime"> · {{ m.startTime | date:'medium' }}</span>
+                <span class="sub" *ngIf="m.status"> — {{ m.status }}</span>
+                <span class="sub" *ngIf="m.inviteSentAt"> (invite sent)</span>
+              </div>
+              <div class="mini-actions">
+                <button class="micro" *ngIf="!m.inviteSentAt" (click)="sendInvite(m.id)">Send invite</button>
+              </div>
+            </div>
+          </div>
+          <div *ngIf="!d.meetings.length" class="hint">No meetings scheduled.</div>
+          <details class="action-fold">
+            <summary>Schedule meeting</summary>
+            <div class="inline-form col">
+              <input placeholder="Title" [(ngModel)]="newMeeting.title" />
+              <textarea placeholder="Agenda (optional)" [(ngModel)]="newMeeting.agenda"></textarea>
+              <div class="row">
+                <label>Start <input type="datetime-local" [(ngModel)]="newMeeting.startTime" /></label>
+                <label>End   <input type="datetime-local" [(ngModel)]="newMeeting.endTime" /></label>
+              </div>
+              <input placeholder="Attendees (comma separated emails)" [(ngModel)]="newMeeting.attendees" />
+              <label class="check-row">
+                <input type="checkbox" [(ngModel)]="newMeeting.sendInviteNow" /> Send invite immediately
+              </label>
+              <button (click)="createMeeting()">Create meeting</button>
+            </div>
+          </details>
+        </div>
+
+        <!-- Reminders -->
+        <div class="section">
+          <h4>Email Reminders ({{ d.reminders.length || 0 }})</h4>
+          <div *ngIf="d.reminders.length" class="card-list">
+            <div class="mini-card" *ngFor="let r of d.reminders">
+              <div>
+                <strong>{{ r.subject }}</strong>
+                <span class="sub" *ngIf="r.scheduledAt"> · {{ r.scheduledAt | date:'medium' }}</span>
+                <span class="sub" *ngIf="r.status"> — {{ r.status }}</span>
+                <span class="sub warn-text" *ngIf="r.sendError"> Error: {{ r.sendError }}</span>
+              </div>
+              <div class="mini-actions">
+                <button class="micro" *ngIf="r.status !== 'sent'" (click)="sendReminder(r.id)">Send now</button>
+              </div>
+            </div>
+          </div>
+          <div *ngIf="!d.reminders.length" class="hint">No reminders created.</div>
+          <details class="action-fold">
+            <summary>Create reminder</summary>
+            <div class="inline-form col">
+              <input placeholder="Subject" [(ngModel)]="newReminder.subject" />
+              <textarea placeholder="Body (optional)" [(ngModel)]="newReminder.body"></textarea>
+              <input placeholder="Recipients (comma separated emails)" [(ngModel)]="newReminder.recipients" />
+              <label>Scheduled at <input type="datetime-local" [(ngModel)]="newReminder.scheduledAt" /></label>
+              <label class="check-row">
+                <input type="checkbox" [(ngModel)]="newReminder.sendNow" /> Send immediately
+              </label>
+              <button (click)="createReminder()">Create reminder</button>
+            </div>
+          </details>
+        </div>
+
+        <!-- AI suggestions -->
+        <div class="section" *ngIf="d.aiSuggestions.length">
+          <h4>AI Suggestions</h4>
+          <ul class="ai-list">
+            <li *ngFor="let s of d.aiSuggestions">{{ s }}</li>
+          </ul>
+        </div>
+
+      </ng-container>
+
+      <ng-template #emptyState>
+        <div class="empty-state">
+          <h3>Select a task</h3>
+          <p>Choose a task from the hierarchy to view full details, manage contractors, schedule meetings, and set email reminders.</p>
+        </div>
+      </ng-template>
+    </div>
+
+  </div>
+</section>
+
+<ng-template #loadingTpl>
+  <section class="page">
+    <div class="loading-msg">Loading project…</div>
+  </section>
+</ng-template>
+
+<!-- ── Recursive tree template ── -->
+<ng-template #nodeTemplate let-items let-depth="depth">
+  <ul class="node-list">
+    <ng-container *ngFor="let node of items">
+      <li class="node-row" *ngIf="matchesFilter(node)">
+        <div class="node-card"
+             [class.selected]="selectedTaskId() === node.id"
+             [style.paddingLeft.px]="12 + depth * 18">
+          <button type="button" class="twisty" (click)="toggleExpand(node.id)" *ngIf="node.children.length">
+            {{ isExpanded(node.id) ? '▾' : '▸' }}
+          </button>
+          <span class="twisty-placeholder" *ngIf="!node.children.length"></span>
+          <button type="button" class="node-select" (click)="selectTask(node.id)">
+            <span class="node-title">{{ node.name }}</span>
+            <span class="node-meta">
+              {{ node.nodeType }}
+              <ng-container *ngIf="node.status">
+                · <span [ngClass]="'status--' + node.status">{{ node.status }}</span>
+              </ng-container>
+              <ng-container *ngIf="node.contractorNames.length"> · 👷 {{ node.contractorNames.length }}</ng-container>
+            </span>
+          </button>
+        </div>
+        <ng-container *ngIf="node.children.length && isExpanded(node.id)">
+          <ng-container *ngTemplateOutlet="nodeTemplate; context: { $implicit: node.children, depth: depth + 1 }"></ng-container>
+        </ng-container>
+      </li>
+    </ng-container>
+  </ul>
+</ng-template>

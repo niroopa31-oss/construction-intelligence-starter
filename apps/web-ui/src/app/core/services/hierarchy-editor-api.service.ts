@@ -52,7 +52,7 @@ export class HierarchyEditorApiService {
   }
 
   getProjectHierarchy(projectId: string) {
-    return this.http.get<HierarchyNode[]>(`/api/projects/${projectId}/hierarchy`);
+    return this.http.get<HierarchyNode[]>(`/api/projects/${projectId}/tasks/tree`);
   }
 
   addProjectNode(projectId: string, payload: UpsertHierarchyNodeRequest) {

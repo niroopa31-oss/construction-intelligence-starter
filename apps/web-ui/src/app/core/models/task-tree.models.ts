@@ -162,3 +162,36 @@ export interface CreateReminderRequest {
   status?: string | null;
   sendNow?: boolean;
 }
+
+export interface AiSummaryResponse {
+  summary_text: string;
+  metrics: {
+    total_towers: number;
+    total_floors: number;
+    total_activities: number;
+    total_milestones: number;
+    delayed_count: number;
+    delayed_pct: number;
+    in_progress_count: number;
+    upcoming_30_days: number;
+    project_start: string | null;
+    project_finish: string | null;
+    duration_days: number | null;
+  };
+  risk: { level: 'low' | 'medium' | 'high'; reasons: string[] };
+  phase_breakdown: Record<string, number>;
+  discipline_breakdown: Record<string, number>;
+  tower_stats: Array<{
+    tower: string; floors: number; activities: number;
+    delayed: number; avg_progress: number | null;
+    planned_start: string | null; planned_finish: string | null;
+  }>;
+  upcoming_milestones: Array<{
+    name: string; tower: string; floor: string;
+    planned_finish: string | null; days_away: number | null;
+  }>;
+  delayed_activities: Array<{
+    name: string; tower: string; floor: string;
+    phase: string; planned_finish: string | null; days_overdue: number | null;
+  }>;
+}

@@ -1,3 +1,4 @@
+com/example/construction/tasks/TaskService.class
 com/example/construction/projects/ProjectRepository.class
 com/example/construction/contractors/Contractor.class
 com/example/construction/meetings/TaskMeeting.class
@@ -52,6 +53,7 @@ com/example/construction/notifications/IcsCalendarInviteFactory.class
 com/example/construction/notifications/NotificationProperties.class
 com/example/construction/projects/ProjectController$CreateProjectRequest.class
 com/example/construction/imports/ImportPreviewDraftService$DraftCreationResult.class
+com/example/construction/tasks/AiSummaryService.class
 com/example/construction/tasks/TaskCollaborationDtos$CreateReminderRequest.class
 com/example/construction/tasks/TaskCollaborationService.class
 com/example/construction/tasks/TaskDetailDto$ArtifactDto.class

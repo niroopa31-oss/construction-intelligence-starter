@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, EventEmitter, Input, Output, signal } from '@angular/core';
+import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges, signal, computed } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { HierarchyNode, UpsertHierarchyNodeRequest } from '../../../core/models/hierarchy.models';
 
@@ -10,7 +10,7 @@ import { HierarchyNode, UpsertHierarchyNodeRequest } from '../../../core/models/
   templateUrl: './hierarchy-editor.component.html',
   styleUrl: './hierarchy-editor.component.css'
 })
-export class HierarchyEditorComponent {
+export class HierarchyEditorComponent implements OnChanges {
   @Input() nodes: HierarchyNode[] = [];
   @Input() title = 'Hierarchy Review';
   @Input() mode: 'draft' | 'project' = 'draft';
@@ -25,6 +25,16 @@ export class HierarchyEditorComponent {
   readonly newNodeParentId = signal<string | null>(null);
   readonly newNode = signal<UpsertHierarchyNodeRequest>({ name: '', nodeType: 'task' });
   readonly editModel = signal<Record<string, UpsertHierarchyNodeRequest>>({});
+
+  /** Cached signal – updated only when @Input() nodes changes, not on every CD cycle */
+  private readonly nodesRef = signal<HierarchyNode[]>([]);
+  readonly flatNodes = computed(() => this.flattenInternal(this.nodesRef()));
+
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes['nodes']) {
+      this.nodesRef.set(this.nodes);
+    }
+  }
 
   toggle(nodeId: string) {
     this.expanded.update(v => ({ ...v, [nodeId]: !v[nodeId] }));
@@ -80,11 +90,12 @@ export class HierarchyEditorComponent {
     this.deleteNode.emit({ nodeId, strategy });
   }
 
-  flatten(nodes: HierarchyNode[], acc: HierarchyNode[] = []): HierarchyNode[] {
+  /** Used internally by the cached computed signal – not called from template */
+  private flattenInternal(nodes: HierarchyNode[], acc: HierarchyNode[] = []): HierarchyNode[] {
     for (const node of nodes) {
       acc.push(node);
       if (node.children?.length) {
-        this.flatten(node.children, acc);
+        this.flattenInternal(node.children, acc);
       }
     }
     return acc;

@@ -1,54 +1,355 @@
 from __future__ import annotations
-
 import re
 from collections import defaultdict
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from datetime import date as date_type, datetime
+from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
+from openpyxl import load_workbook          # ← ADD
+from sklearn.metrics.pairwise import cosine_similarity
 
 from app.models.canonical_models import (
-    CanonicalTask,
-    ImportPreview,
-    MappingCandidate,
-    NodeType,
-    SheetProfile,
+    CanonicalTask, ImportPreview, MappingCandidate, NodeType, SheetProfile,
 )
 from app.services.project_type_inference import infer_project_type
 
-DATE_CANDIDATES = ["date", "start date", "end date", "planned start", "planned finish", "finish", "end", "target date"]
-PROGRESS_CANDIDATES = ["progress", "% progress", "actual progress", "ach %", "completion", "% complete", "status"]
-ACTIVITY_CANDIDATES = [
-    "activity", "task", "work", "description", "item", "activity name",
-    "particulars", "scope", "scope of work", "work description",
-    "activity description", "component", "element", "subject",
-    "boq item", "detail", "details", "name of activity",
-    "name of work", "nature of work", "trade", "schedule item",
-]
-FLOOR_CANDIDATES = ["floor", "flats/floor", "flat", "level", "lvl", "storey", "story"]
-TOWER_CANDIDATES = ["tower", "block", "wing", "building", "bldg"]
-START_CANDIDATES = ["start", "start date", "planned start", "baseline start", "commence", "commencement"]
-FINISH_CANDIDATES = ["finish", "end", "planned finish", "baseline finish", "date", "target date", "completion date", "end date"]
-CONTRACTOR_CANDIDATES = ["contractor", "agency", "vendor", "subcontractor", "sub contractor"]
-REMARKS_CANDIDATES = ["remarks", "remark", "comments", "status remarks", "note", "observation"]
-QTY_CANDIDATES = ["qty", "quantity", "planned qty", "balance qty", "actual qty", "total qty"]
-UOM_CANDIDATES = ["uom", "unit", "units"]
+# ── helpers (must be defined before use) ─────────────────────────────────────
+def _t(value: Optional[str], length: int = 100) -> Optional[str]:
+    return value[:length] if value else value
 
-MILESTONE_HINTS = ["handover", "completion", "complete", "approval", "ready", "casting"]
+def _safe_float(s) -> Optional[float]:
+    try: return float(s)
+    except (ValueError, TypeError): return None
+
+def _is_percent(value) -> bool:
+    try: return 0 <= float(str(value).replace("%", "").strip()) <= 100
+    except Exception: return False
+
+def _date_ratio(series: pd.Series) -> float:
+    count = 0
+    for v in list(series):
+        try:
+            if isinstance(v, pd.Timestamp) and not pd.isna(v) and v.year >= 1970: count += 1
+            elif isinstance(v, (datetime, date_type)) and v.year >= 1970: count += 1
+            elif isinstance(v, str) and re.search(r"\d{1,4}[-/]\d{1,2}[-/]\d{1,4}", v): count += 1
+            elif isinstance(v, (int, float)) and 25569 <= float(v) < 2958466: count += 1
+        except Exception: pass
+    return count / max(len(list(series)), 1)
+
+_DATE_STRING_PAT = re.compile(
+    r"^\d{4}-\d{2}-\d{2}|^\d{2}[/-]\d{2}[/-]\d{4}|\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}"
+)
+
+def _is_date_like_value(value: Any) -> bool:
+    if isinstance(value, (pd.Timestamp, datetime, date_type)):
+        return True
+    if isinstance(value, str) and _DATE_STRING_PAT.search(value.strip()):
+        return True
+    return False
+
+def _column_is_mostly_dates(series: pd.Series) -> bool:
+    non_null = [v for v in series if pd.notna(v)]
+    if not non_null: return False
+    return sum(1 for v in non_null[:40] if _is_date_like_value(v)) / max(len(non_null[:40]), 1) > 0.4
+
+def _parse_date(value: Any) -> Optional[str]:
+    """Convert any date-like value to ISO string."""
+    if value is None or value is pd.NaT: return None
+    try:
+        if not isinstance(value, (pd.Timestamp, datetime, date_type)) and pd.isna(value): return None
+    except (TypeError, ValueError): pass
+    if isinstance(value, pd.Timestamp):
+        return value.date().isoformat() if not pd.isna(value) and 1970 <= value.year <= 2100 else None
+    if isinstance(value, datetime):
+        return value.date().isoformat() if 1970 <= value.year <= 2100 else None
+    if isinstance(value, date_type):
+        return value.isoformat() if 1970 <= value.year <= 2100 else None
+    if isinstance(value, (int, float)):
+        try:
+            d = pd.to_datetime(float(value), unit='D', origin='1899-12-30').date()
+            return d.isoformat() if 1970 <= d.year <= 2100 else None
+        except Exception: return None
+    if isinstance(value, str):
+        for fmt in ["%d-%m-%Y","%d/%m/%Y","%Y-%m-%d","%d-%b-%Y","%d-%b-%y",
+                    "%d/%m/%y","%m/%d/%Y","%d.%m.%Y","%d %b %Y","%d %B %Y","%d-%m-%y"]:
+            try:
+                d = datetime.strptime(value.strip(), fmt).date()
+                return d.isoformat() if 1970 <= d.year <= 2100 else None
+            except ValueError: pass
+        try:
+            d = pd.to_datetime(value.strip(), dayfirst=True).date()
+            return d.isoformat() if 1970 <= d.year <= 2100 else None
+        except Exception: pass
+    return None
+
+# ── constants ─────────────────────────────────────────────────────────────────
+MILESTONE_HINTS = ["handover", "completion", "complete", "approval", "ready", "handing over"]
 PHASE_RULES = {
-    "superstructure": ["slab", "column", "beam", "concrete", "rcc", "reinforcement", "railing"],
-    "mep": ["electrical", "plumbing", "hvac", "fire", "duct", "conduit", "cable"],
-    "finishing": ["marble", "tiles", "painting", "putty", "joinery", "ceiling", "flooring"],
-    "handover": ["handover", "snag", "closeout"],
-    "qa_qc": ["inspection", "qa", "qc", "checklist"],
+    "superstructure": ["slab","column","beam","concrete","rcc","reinforcement","railing","structure","structural","shuttering","formwork","casting","pour","footing","foundation","pile","raft","retaining wall","shear wall","core wall","staircase","lift pit","basement","podium"],
+    "mep":            ["electrical","plumbing","hvac","fire","duct","conduit","cable","sanitary","drainage","water supply","firefighting","sprinkler","bms","ems","lift","elevator","escalator","generator","switchgear","panel","wiring","earthing"],
+    "finishing":      ["marble","tiles","tile","painting","putty","joinery","ceiling","flooring","plaster","gypsum","false ceiling","dado","granite","wood","door","window","glazing","facade","cladding","waterproofing","screed","grout","skirting","kitchen","toilet","bathroom","fixture","punning","ledge"],
+    "handover":       ["handover","snag","closeout","handing over","possession","noc","completion certificate"],
+    "qa_qc":          ["inspection","qa","qc","checklist","testing","commissioning","trial"],
+    "civil":          ["masonry","brick","block work","backfill","excavation","earth work","soil","pest control","pest"],
 }
 DISCIPLINE_RULES = {
-    "civil": ["slab", "column", "beam", "rcc", "concrete", "railing", "masonry"],
-    "mep": ["electrical", "plumbing", "hvac", "fire", "conduit", "cable"],
-    "architectural": ["marble", "tiles", "painting", "joinery", "ceiling", "flooring"],
+    "civil":         ["slab","column","beam","rcc","concrete","railing","masonry","structure","structural","shuttering","formwork","footing","foundation","pile","raft","staircase","excavation","backfill","earth","pest"],
+    "mep":           ["electrical","plumbing","hvac","fire","conduit","cable","sanitary","drainage","water supply","firefighting","sprinkler","bms","lift","elevator","generator","panel","wiring","flush valve","switch board","ac unit","cp and sanitary"],
+    "architectural": ["marble","tiles","tile","painting","joinery","ceiling","flooring","plaster","gypsum","false ceiling","dado","granite","wood","door","window","glazing","facade","cladding","kitchen","toilet","bathroom","fixture","screed","punning","ledge","railing","balcony","sit out","modular"],
+}
+STATUS_PROGRESS_MAP = {
+    "completed": 100.0, "complete": 100.0, "done": 100.0, "finished": 100.0,
+    "in progress": 50.0, "in-progress": 50.0, "ongoing": 50.0, "started": 25.0,
+    "not started": 0.0, "not-started": 0.0, "pending": 0.0, "yet to start": 0.0,
 }
 
+# ── Matrix sheet detector & parser ───────────────────────────────────────────
+def _is_matrix_sheet(df: pd.DataFrame) -> bool:
+    """
+    Detect sheets where:
+    - columns 2+ are mostly dates (activities as column headers, dates as values)
+    - column 0/1 are floor/serial numbers
+    """
+    if len(df.columns) < 4: return False
+    date_col_count = sum(
+        1 for c in list(df.columns)[2:]
+        if _column_is_mostly_dates(df[c].dropna().head(20))
+    )
+    return date_col_count / max(len(df.columns) - 2, 1) > 0.5
 
+
+def _normalize_activity_name(name: str) -> str:
+    """Normalize activity names to consistent Title Case regardless of source casing."""
+    # Strip extra whitespace
+    name = re.sub(r"\s+", " ", name.strip())
+    # Title case but preserve known acronyms
+    ACRONYMS = {"HVAC", "RCC", "MEP", "BMS", "EMS", "NOC", "QA", "QC", "AC", "CP", "SLD", "COM"}
+    words = []
+    for word in name.split():
+        if word.upper() in ACRONYMS:
+            words.append(word.upper())
+        else:
+            words.append(word.capitalize())
+    return " ".join(words)
+
+
+def _find_floor_col_idx(headers: List[str], data_df: pd.DataFrame) -> int:
+    """
+    Find the floor column index robustly:
+    1. Look for header name matching floor/flat/level pattern
+    2. Fall back to first column whose values are mostly small integers (floor numbers)
+    """
+    FLOOR_PAT = re.compile(r"flat|floor|level|lvl|storey|unit", re.I)
+
+    # Try by header name
+    for i, h in enumerate(headers):
+        if FLOOR_PAT.search(h):
+            return i
+
+    # Try by content: first col with mostly small integers (1-200) or unit codes (>999)
+    for i, h in enumerate(headers):
+        if h not in data_df.columns:
+            continue
+        sample = data_df[h].dropna().head(20)
+        num_count = 0
+        for v in sample:
+            f = _safe_float(str(v))
+            if f is not None and (1 <= f <= 200 or 1000 <= f <= 99999):
+                num_count += 1
+        if num_count / max(len(sample), 1) > 0.5:
+            return i
+
+    # Default to first column
+    return 0
+
+
+def _parse_matrix_sheet(
+    sheet_name: str,
+    raw_df: pd.DataFrame,
+    color_map: Optional[Dict[Tuple[int, int], str]] = None,
+) -> List[CanonicalTask]:
+    print(f"  [MATRIX] Parsing '{sheet_name}' as matrix sheet")
+
+    df = raw_df.copy()
+    color_map = color_map or {}
+
+    # Find header row
+    header_row_idx = None
+    for i in range(min(10, len(df))):
+        row = df.iloc[i]
+        vals = [str(v).strip() for v in row if pd.notna(v) and str(v).strip()]
+        text_count = sum(1 for v in vals if isinstance(v, str) and len(v) > 2 and not _is_date_like_value(v))
+        if text_count >= 3:
+            header_row_idx = i
+            break
+
+    if header_row_idx is None:
+        print(f"  [MATRIX] Could not find header row in '{sheet_name}'")
+        return []
+
+    print(f"  [MATRIX] header_row_idx={header_row_idx} (0-based) → excel row {header_row_idx + 1}")
+
+    headers = [
+        re.sub(r"\s+", " ", str(v).strip()) if pd.notna(v) and str(v).strip() else f"col_{j}"
+        for j, v in enumerate(df.iloc[header_row_idx])
+    ]
+    data_df = df.iloc[header_row_idx + 1:].reset_index(drop=True)
+    data_df.columns = headers
+    data_df = data_df.dropna(how="all").reset_index(drop=True)
+
+    floor_col_idx = _find_floor_col_idx(headers, data_df)
+    floor_col = headers[floor_col_idx]
+
+    activity_cols = []
+    for i, col in enumerate(headers):
+        if i == floor_col_idx: continue
+        if col.startswith("col_"): continue
+        if col not in data_df.columns: continue
+        if _column_is_mostly_dates(data_df[col].dropna().head(20)):
+            activity_cols.append(col)
+
+    tower = _extract_tower_from_sheet(sheet_name)
+    tasks: List[CanonicalTask] = []
+    tower_cache: Dict[str, CanonicalTask] = {}
+    floor_cache: Dict[str, CanonicalTask] = {}
+    stage_parent_id = f"sheet::{sheet_name}"
+
+    if tower:
+        tower_id = f"tower::{sheet_name}::{tower}"[:100]
+        if tower_id not in tower_cache:
+            tower_cache[tower_id] = CanonicalTask(
+                external_id=tower_id,
+                external_parent_id=_t(stage_parent_id),
+                source_type="excel", source_sheet=_t(sheet_name),
+                name=_t(tower), normalized_name=_t(tower),
+                node_type=NodeType.stage, tower=_t(tower),
+                confidence=0.99,
+                metadata={"generated": True, "level": "tower"},
+            )
+            tasks.append(tower_cache[tower_id])
+        tower_parent_id = tower_id
+    else:
+        tower_parent_id = stage_parent_id
+
+    for idx, row in data_df.iterrows():
+        raw_floor = str(row.get(floor_col, "")).strip() if floor_col else ""
+        floor = _normalize_floor_value(raw_floor)
+        if not floor:
+            continue
+
+        floor_id = f"floor::{sheet_name}::{tower or 'NA'}::{floor}"[:100]
+        if floor_id not in floor_cache:
+            floor_cache[floor_id] = CanonicalTask(
+                external_id=floor_id,
+                external_parent_id=_t(tower_parent_id),
+                source_type="excel", source_sheet=_t(sheet_name),
+                name=_t(floor), normalized_name=_t(floor),
+                node_type=NodeType.task,
+                tower=_t(tower), floor=_t(floor),
+                confidence=0.97,
+                metadata={"generated": True, "level": "floor"},
+            )
+            tasks.append(floor_cache[floor_id])
+
+        for act_col in activity_cols:
+            raw_date = row.get(act_col)
+            planned_start = _parse_date(raw_date)
+            if not planned_start:
+                continue
+
+            activity_name = _normalize_activity_name(act_col)
+            phase      = _infer_phase(activity_name)
+            discipline = _infer_discipline(activity_name)
+            is_milestone = any(k in activity_name.lower() for k in MILESTONE_HINTS)
+
+            # ── Color-derived status ──
+            # pandas idx is 0-based from data start
+            # excel row = header_row_idx (0-based) + 1 (excel is 1-based) + 1 (header row itself) + idx (data row)
+            col_idx_1based   = headers.index(act_col) + 1
+            excel_row_1based = header_row_idx + 2 + int(idx)   # ← FIXED offset
+            cell_status   = color_map.get((excel_row_1based, col_idx_1based), "not_started")
+            cell_progress = _status_to_progress(cell_status)
+
+            # Debug first few
+            if int(idx) < 3 and act_col == activity_cols[0]:
+                print(f"  [COLOR] sheet={sheet_name} floor={floor} col={act_col} "
+                      f"excel_row={excel_row_1based} col={col_idx_1based} → {cell_status}")
+
+            tasks.append(CanonicalTask(
+                external_id=f"row::{sheet_name}::{floor}::{_slug(activity_name)}"[:100],
+                external_parent_id=_t(floor_id),
+                source_type="excel", source_sheet=_t(sheet_name),
+                source_row=excel_row_1based,
+                name=_t(activity_name),
+                normalized_name=_t(activity_name),
+                node_type=NodeType.milestone if is_milestone else NodeType.sub_task,
+                tower=_t(tower), floor=_t(floor),
+                phase=_t(phase), discipline=_t(discipline),
+                planned_start=planned_start,
+                planned_finish=planned_start,
+                actual_progress=cell_progress,
+                status=cell_status,
+                confidence=0.90,
+                metadata={"sheet_name": sheet_name, "matrix": True, "color_status": cell_status},
+            ))
+
+    print(f"  [MATRIX] Generated {len(tasks)} tasks for '{sheet_name}'")
+    return tasks
+
+
+def _extract_tower_from_sheet(sheet_name: str) -> Optional[str]:
+    s = sheet_name.strip()
+    # "Tower-A", "D-Tower", "E-Tower" etc.
+    m = re.search(r"(tower[-\s]?[a-z0-9]+|[a-z0-9]+[-\s]?tower|block[-\s]?[a-z0-9]+)", s, re.I)
+    return m.group(0).title() if m else s
+
+
+def _normalize_floor_value(raw: str) -> Optional[str]:
+    if not raw or _is_date_like_value(raw): return None
+    s = raw.strip()
+    if re.fullmatch(r"[s\.?no\.?|sl|sr|serial].*", s, re.I): return None
+    f = _safe_float(s)
+    if f is not None:
+        n = int(f) if f == int(f) else None
+        if n is None: return None
+        # Large unit codes like 4004 → extract floor portion (4004 → floor 40, flat 04)
+        if n > 999:
+            floor_num = n // 100
+            return f"Floor {floor_num}"
+        return f"Floor {n}" if -5 <= n <= 200 else None
+    return s if len(s) <= 30 else None
+
+
+def _safe_floor_number(raw: str) -> Optional[int]:
+    f = _safe_float(raw)
+    if f is None: return None
+    n = int(f)
+    if n > 999: return n // 100
+    return n if -5 <= n <= 200 else None
+
+
+def _slug(t: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", t.lower()).strip("-")[:50]
+
+
+def _infer_phase(activity: str) -> str:
+    name = activity.lower()
+    for phase, kws in PHASE_RULES.items():
+        if any(k in name for k in kws): return phase
+    return "general"
+
+
+def _infer_discipline(activity: str) -> str:
+    name = activity.lower()
+    for disc, kws in DISCIPLINE_RULES.items():
+        if any(k in name for k in kws): return disc
+    return "general"
+
+
+# ── Main service ──────────────────────────────────────────────────────────────
 class ExcelNormalizationService:
+
     def parse_workbook(self, file_path: str, project_name_hint: Optional[str] = None) -> ImportPreview:
         workbook = pd.ExcelFile(file_path)
         sheet_profiles: List[SheetProfile] = []
@@ -56,613 +357,325 @@ class ExcelNormalizationService:
         warnings: List[str] = []
         project_name = project_name_hint or self._project_name_from_workbook(workbook)
 
+        # ── Pre-pass: build color map for ALL sheets ──
+        color_map_all = _build_color_map(file_path)
+
+        SKIP_SHEETS = re.compile(r"^(sheet\d*|status|marble|summary|dashboard)$", re.I)
+
         for sheet_name in workbook.sheet_names:
-            df = pd.read_excel(file_path, sheet_name=sheet_name)
-            if df.empty:
-                sheet_profiles.append(
-                    SheetProfile(sheet_name=sheet_name, total_rows=0, detected_role="empty", confidence=1.0)
-                )
+            if SKIP_SHEETS.match(sheet_name.strip()):
+                print(f"[SKIP] sheet '{sheet_name}'")
+                sheet_profiles.append(SheetProfile(
+                    sheet_name=sheet_name, total_rows=0,
+                    detected_role="skipped", confidence=1.0,
+                ))
                 continue
 
-            cleaned = self._clean_dataframe(df)
-            profile, rows = self._parse_sheet(sheet_name, cleaned)
-            sheet_profiles.append(profile)
+            raw_df = pd.read_excel(file_path, sheet_name=sheet_name, header=None)
+            if raw_df.empty:
+                sheet_profiles.append(SheetProfile(
+                    sheet_name=sheet_name, total_rows=0,
+                    detected_role="empty", confidence=1.0,
+                ))
+                continue
+
+            print(f"\n{'='*60}\n[SHEET] {sheet_name}  shape={raw_df.shape}")
+
+            if _is_matrix_sheet(raw_df):
+                rows = _parse_matrix_sheet(
+                    sheet_name, raw_df,
+                    color_map=color_map_all.get(sheet_name, {})   # ← pass colors
+                )
+                role, conf = "matrix", 0.95
+            else:
+                cleaned = self._clean_dataframe(raw_df)
+                rows = self._parse_standard_sheet(sheet_name, cleaned)
+                role, conf = "progress", 0.70
+
+            sheet_profiles.append(SheetProfile(
+                sheet_name=sheet_name,
+                total_rows=len(raw_df),
+                detected_role=role,
+                confidence=conf,
+                warnings=[],
+            ))
             flat_tasks.extend(rows)
 
         flat_tasks = self._dedupe_tasks(flat_tasks)
-        milestone_tasks = self._generate_milestones(flat_tasks)
-        flat_tasks.extend(milestone_tasks)
-        flat_tasks = self._dedupe_tasks(flat_tasks)
+        flat_tasks = self._rollup_dates(flat_tasks)
         tree = self._build_tree(flat_tasks)
-
         inferred = infer_project_type(project_name, flat_tasks)
-        warnings.extend(self._global_warnings(sheet_profiles, flat_tasks))
+
+        task_count = len([t for t in flat_tasks if t.node_type != NodeType.milestone])
+        milestone_count = len([t for t in flat_tasks if t.node_type == NodeType.milestone])
+
+        if not flat_tasks:
+            warnings.append("No tasks extracted.")
 
         return ImportPreview(
             project_name=project_name,
             project_type=inferred["projectType"],
             project_type_confidence=inferred["confidence"],
             source_type="excel",
-            task_count=len([t for t in flat_tasks if t.node_type != NodeType.milestone]),
-            milestone_count=len([t for t in flat_tasks if t.node_type == NodeType.milestone]),
-            hierarchy_strategy="sheet -> tower/block -> floor -> activity",
+            task_count=task_count,
+            milestone_count=milestone_count,
+            hierarchy_strategy="sheet(tower) → floor → activity",
             sheets=sheet_profiles,
             flat_tasks=flat_tasks,
             tree=tree,
             warnings=warnings,
         )
 
-    def _parse_sheet(self, sheet_name: str, df: pd.DataFrame) -> Tuple[SheetProfile, List[CanonicalTask]]:
-        cols = {self._normalize_column_name(c): c for c in df.columns}
-        tower_default = self._tower_from_sheet(sheet_name)
-
-        # ── Pass 1: header-name matching ──
-        mapping = {
-            "tower": self._pick(cols, TOWER_CANDIDATES),
-            "floor": self._pick(cols, FLOOR_CANDIDATES),
-            "activity": self._pick(cols, ACTIVITY_CANDIDATES),
-            "planned_start": self._pick(cols, START_CANDIDATES),
-            "planned_finish": self._pick(cols, FINISH_CANDIDATES),
-            "progress": self._pick(cols, PROGRESS_CANDIDATES),
-            "contractor": self._pick(cols, CONTRACTOR_CANDIDATES),
-            "remarks": self._pick(cols, REMARKS_CANDIDATES),
-            "qty": self._pick(cols, QTY_CANDIDATES),
-            "uom": self._pick(cols, UOM_CANDIDATES),
-        }
-
-        # ── Pass 2: content-based intelligent detection for missing columns ──
-        used_cols = {v for v in mapping.values() if v is not None}
-        mapping, content_warnings = self._infer_columns_from_content(df, mapping, used_cols)
-
-        role, role_confidence = self._detect_sheet_role(sheet_name, cols)
-        warnings: List[str] = list(content_warnings)
-
-        # Fallback: if still no activity column, pick the best text-heavy column
-        if not mapping["activity"] and role != "labour":
-            best_col = self._guess_activity_column(df, exclude=used_cols)
-            if best_col:
-                mapping["activity"] = best_col
-                warnings.append(f"No standard activity column detected; using '{best_col}' as best guess.")
-            else:
-                warnings.append("No activity/task column detected; sheet skipped.")
-                profile = SheetProfile(
-                    sheet_name=sheet_name,
-                    total_rows=len(df.index),
-                    detected_role=role,
-                    confidence=role_confidence,
-                    mapping=[MappingCandidate(logical_name=k, column_name=v, confidence=1.0 if v else 0.0) for k, v in mapping.items()],
-                    warnings=warnings,
-                )
-                return profile, []
-
+    # ── standard (non-matrix) sheet fallback ─────────────────────────────────
+    def _parse_standard_sheet(self, sheet_name: str, df: pd.DataFrame) -> List[CanonicalTask]:
+        """Fallback for non-matrix sheets (labour reports etc.)"""
         tasks: List[CanonicalTask] = []
-        tower_cache: Dict[str, CanonicalTask] = {}
-        floor_cache: Dict[str, CanonicalTask] = {}
+        tower = _extract_tower_from_sheet(sheet_name)
+
+        # find likely activity column
+        act_col = None
+        for col in df.columns:
+            series = df[col].dropna()
+            str_vals = [v for v in series if isinstance(v, str) and len(v.strip()) > 4]
+            if len(str_vals) >= 3 and not _column_is_mostly_dates(series.head(20)):
+                act_col = col; break
+
+        if not act_col: return tasks
+
+        start_col = next((c for c in df.columns if _column_is_mostly_dates(df[c].dropna().head(20))), None)
+        finish_col = next((c for c in df.columns
+                           if c != start_col and _column_is_mostly_dates(df[c].dropna().head(20))), None)
+
+        stage_parent_id = f"sheet::{sheet_name}"
+        tower_id = f"tower::{sheet_name}::{tower}"[:100] if tower else stage_parent_id
+
+        if tower:
+            tasks.append(CanonicalTask(
+                external_id=tower_id, external_parent_id=_t(stage_parent_id),
+                source_type="excel", source_sheet=_t(sheet_name),
+                name=_t(tower), normalized_name=_t(tower),
+                node_type=NodeType.stage, tower=_t(tower), confidence=0.9,
+                metadata={"generated": True, "level": "tower"},
+            ))
 
         for idx, row in df.iterrows():
-            activity = self._clean(row.get(mapping["activity"])) if mapping["activity"] else None
-            if not activity:
-                continue
+            activity = str(row.get(act_col, "")).strip()
+            if not activity or _is_date_like_value(activity): continue
+            if re.fullmatch(r"\d+", activity): continue
 
-            tower = self._clean(row.get(mapping["tower"])) if mapping["tower"] else tower_default
-            floor = self._normalize_floor(self._clean(row.get(mapping["floor"]))) if mapping["floor"] else None
-            planned_start = self._dateish(row.get(mapping["planned_start"])) if mapping["planned_start"] else None
-            planned_finish = self._dateish(row.get(mapping["planned_finish"])) if mapping["planned_finish"] else None
-            progress = self._progressish(row.get(mapping["progress"])) if mapping["progress"] else None
-            contractor = self._clean(row.get(mapping["contractor"])) if mapping["contractor"] else None
-            remarks = self._clean(row.get(mapping["remarks"])) if mapping["remarks"] else None
-            qty = self._floatish(row.get(mapping["qty"])) if mapping["qty"] else None
-            uom = self._clean(row.get(mapping["uom"])) if mapping["uom"] else None
+            tasks.append(CanonicalTask(
+                external_id=f"row::{sheet_name}::{idx}::{_slug(activity)}"[:100],
+                external_parent_id=_t(tower_id),
+                source_type="excel", source_sheet=_t(sheet_name),
+                name=_t(activity), normalized_name=_t(activity.title()),
+                node_type=NodeType.sub_task,
+                tower=_t(tower),
+                phase=_t(_infer_phase(activity)),
+                discipline=_t(_infer_discipline(activity)),
+                planned_start=_parse_date(row.get(start_col)) if start_col else None,
+                planned_finish=_parse_date(row.get(finish_col)) if finish_col else None,
+                confidence=0.65,
+                metadata={"sheet_name": sheet_name},
+            ))
+        return tasks
 
-            stage_parent_id = f"sheet::{sheet_name}"
-            if tower:
-                tower_id = f"tower::{sheet_name}::{tower}"
-                if tower_id not in tower_cache:
-                    tower_cache[tower_id] = CanonicalTask(
-                        external_id=tower_id,
-                        external_parent_id=stage_parent_id,
-                        source_type="excel",
-                        source_sheet=sheet_name,
-                        name=tower,
-                        normalized_name=tower,
-                        node_type=NodeType.stage,
-                        tower=tower,
-                        confidence=0.98,
-                        metadata={"generated": True, "level": "tower"},
-                    )
-                    tasks.append(tower_cache[tower_id])
-                parent_id = tower_id
-            else:
-                parent_id = stage_parent_id
-
-            if floor:
-                floor_id = f"floor::{sheet_name}::{tower or 'NA'}::{floor}"
-                if floor_id not in floor_cache:
-                    floor_cache[floor_id] = CanonicalTask(
-                        external_id=floor_id,
-                        external_parent_id=parent_id,
-                        source_type="excel",
-                        source_sheet=sheet_name,
-                        name=floor,
-                        normalized_name=floor,
-                        node_type=NodeType.task,
-                        tower=tower,
-                        floor=floor,
-                        confidence=0.96,
-                        metadata={"generated": True, "level": "floor"},
-                    )
-                    tasks.append(floor_cache[floor_id])
-                parent_id = floor_id
-
-            phase = self._infer_phase(activity)
-            discipline = self._infer_discipline(activity)
-            node_type = NodeType.milestone if self._looks_like_milestone(activity, planned_start, planned_finish) else NodeType.sub_task
-            task = CanonicalTask(
-                external_id=f"row::{sheet_name}::{idx + 2}::{self._slug(activity)}",
-                external_parent_id=parent_id,
-                source_type="excel",
-                source_sheet=sheet_name,
-                source_row=int(idx) + 2,
-                name=activity,
-                normalized_name=self._normalize_activity(activity),
-                node_type=node_type,
-                project_hint=sheet_name,
-                tower=tower,
-                floor=floor,
-                phase=phase,
-                discipline=discipline,
-                planned_start=planned_start,
-                planned_finish=planned_finish,
-                actual_progress=progress,
-                planned_qty=qty,
-                uom=uom,
-                contractor=contractor,
-                remarks=remarks,
-                confidence=0.78 if tower or floor else 0.66,
-                metadata={"sheet_role": role, "sheet_name": sheet_name},
-            )
-            tasks.append(task)
-
-        profile = SheetProfile(
-            sheet_name=sheet_name,
-            total_rows=len(df.index),
-            detected_role=role,
-            confidence=role_confidence,
-            mapping=[
-                MappingCandidate(logical_name=k, column_name=v, confidence=0.95 if v else 0.0)
-                for k, v in mapping.items()
-            ],
-            warnings=warnings,
-        )
-        return profile, tasks
-
-    def _global_warnings(self, profiles: Iterable[SheetProfile], tasks: List[CanonicalTask]) -> List[str]:
-        warnings: List[str] = []
-        if not tasks:
-            warnings.append("No tasks were extracted from workbook.")
-        if not any(t.planned_finish or t.planned_start for t in tasks):
-            warnings.append("No usable date columns detected; forecasting will be limited.")
-        if not any(t.floor for t in tasks):
-            warnings.append("No floor/level column detected; hierarchy may be flatter than expected.")
-        skipped = [p.sheet_name for p in profiles if any("skipped" in w.lower() for w in p.warnings)]
-        if skipped:
-            warnings.append(f"Some sheets were skipped due to missing activity columns: {', '.join(skipped[:5])}")
-        return warnings
-
-    def _project_name_from_workbook(self, workbook: pd.ExcelFile) -> str:
+    # ── utilities ─────────────────────────────────────────────────────────────
+    def _project_name_from_workbook(self, workbook) -> str:
         stem = getattr(workbook, "io", "Imported Project")
-        if isinstance(stem, str):
-            stem = stem.split("/")[-1].rsplit(".", 1)[0]
+        if isinstance(stem, str): stem = stem.split("/")[-1].rsplit(".", 1)[0]
         return str(stem).replace("_", " ").strip() or "Imported Project"
 
     def _build_tree(self, tasks: List[CanonicalTask]) -> List[CanonicalTask]:
         root = CanonicalTask(
-            external_id="project::root",
-            source_type="excel",
-            name="Project Root",
-            node_type=NodeType.project,
-            confidence=1.0,
+            external_id="project::root", source_type="excel",
+            name="Project Root", node_type=NodeType.project, confidence=1.0,
         )
-        by_id = {root.external_id: root}
+        by_id: Dict[str, CanonicalTask] = {root.external_id: root}
         cloned = [CanonicalTask(**t.model_dump(exclude={"children"})) for t in tasks]
-        for task in cloned:
-            by_id[task.external_id] = task
-
-        for task in cloned:
-            parent_id = task.external_parent_id or root.external_id
-            parent = by_id.get(parent_id, root)
-            parent.children.append(task)
-
+        for t in cloned: by_id[t.external_id] = t
+        for t in cloned:
+            by_id.get(t.external_parent_id or root.external_id, root).children.append(t)
         return root.children
-
-    def _generate_milestones(self, tasks: List[CanonicalTask]) -> List[CanonicalTask]:
-        milestones: List[CanonicalTask] = []
-        by_parent: Dict[str, List[CanonicalTask]] = defaultdict(list)
-        for task in tasks:
-            if task.node_type == NodeType.sub_task and task.external_parent_id:
-                by_parent[task.external_parent_id].append(task)
-
-        for parent_id, siblings in by_parent.items():
-            if len(siblings) < 2:
-                continue
-            dated = [t for t in siblings if t.planned_finish]
-            if not dated:
-                continue
-            last = sorted(dated, key=lambda x: x.planned_finish or "")[0 if False else -1]
-            floor = last.floor or "Package"
-            tower = last.tower or "Scope"
-            milestone_name = f"{tower} {floor} completion"
-            milestones.append(
-                CanonicalTask(
-                    external_id=f"milestone::{parent_id}",
-                    external_parent_id=parent_id,
-                    source_type="excel",
-                    source_sheet=last.source_sheet,
-                    name=milestone_name,
-                    normalized_name=milestone_name,
-                    node_type=NodeType.milestone,
-                    tower=last.tower,
-                    floor=last.floor,
-                    phase="handover" if "handover" in milestone_name.lower() else last.phase,
-                    discipline=last.discipline,
-                    planned_finish=last.planned_finish,
-                    confidence=0.72,
-                    metadata={"generated": True, "reason": "latest sibling finish date"},
-                )
-            )
-        return milestones
 
     def _dedupe_tasks(self, tasks: List[CanonicalTask]) -> List[CanonicalTask]:
         seen: Dict[str, CanonicalTask] = {}
-        for task in tasks:
-            seen[task.external_id] = task
+        for t in tasks: seen[t.external_id] = t
         return list(seen.values())
 
-    def _detect_sheet_role(self, sheet_name: str, cols: Dict[str, str]) -> Tuple[str, float]:
-        joined = f"{sheet_name.lower()} {' '.join(cols.keys())}"
-        if "labour" in joined or "nmr" in joined:
-            return "labour", 0.94
-        if "dashboard" in joined or "status" in joined:
-            return "dashboard", 0.85
-        if any(k in joined for k in ["marble", "tiles", "finishing"]):
-            return "progress", 0.76
-        return "progress", 0.68
+    def _rollup_dates(self, tasks: List[CanonicalTask]) -> List[CanonicalTask]:
+        by_id = {t.external_id: t for t in tasks}
+        children_of: Dict[str, List[CanonicalTask]] = defaultdict(list)
+        for t in tasks:
+            if t.external_parent_id and t.external_parent_id in by_id:
+                children_of[t.external_parent_id].append(t)
+
+        def _rollup(task: CanonicalTask):
+            children = children_of.get(task.external_id, [])
+            for c in children: _rollup(c)
+            starts   = [c.planned_start  for c in children if c.planned_start]
+            finishes = [c.planned_finish for c in children if c.planned_finish]
+            progs    = [c.actual_progress for c in children if c.actual_progress is not None]
+            if starts   and not task.planned_start:  task.planned_start  = min(starts)
+            if finishes and not task.planned_finish: task.planned_finish = max(finishes)
+            if progs    and task.actual_progress is None:
+                task.actual_progress = round(sum(progs) / len(progs), 2)
+
+        roots = [t for t in tasks if not t.external_parent_id or t.external_parent_id not in by_id]
+        for r in roots: _rollup(r)
+        return tasks
 
     def _clean_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
         df.columns = [str(c).strip() for c in df.columns]
         df = df.dropna(how="all").reset_index(drop=True)
-
-        # Many construction Excel files have merged title / logo rows above the
-        # real header. If the current column names don't look like a recognisable
-        # header, scan the first 15 rows to find a better one.
-        if not self._looks_like_header(df.columns):
-            best_row, best_score = -1, 0
-            scan_limit = min(15, len(df))
-            for i in range(scan_limit):
-                row_values = [str(v).strip() for v in df.iloc[i] if pd.notna(v) and str(v).strip()]
-                score = self._header_score(row_values)
-                if score > best_score:
-                    best_score = score
-                    best_row = i
-            if best_row >= 0 and best_score > 0:
-                new_headers = [str(v).strip() if pd.notna(v) else f"col_{j}"
-                               for j, v in enumerate(df.iloc[best_row])]
-                df = df.iloc[best_row + 1:].reset_index(drop=True)
-                df.columns = new_headers
-                df = df.dropna(how="all").reset_index(drop=True)
-
         return df
 
-    def _looks_like_header(self, columns) -> bool:
-        """Return True if the current column names contain at least one recognisable field."""
-        all_candidates = (ACTIVITY_CANDIDATES + FLOOR_CANDIDATES + TOWER_CANDIDATES +
-                          START_CANDIDATES + FINISH_CANDIDATES + PROGRESS_CANDIDATES +
-                          QTY_CANDIDATES + UOM_CANDIDATES)
-        norms = {self._normalize_column_name(c) for c in columns}
-        for cand in all_candidates:
-            norm_cand = self._normalize_column_name(cand)
-            if norm_cand in norms:
-                return True
-            if any(norm_cand in n for n in norms):
-                return True
-        return False
 
-    def _header_score(self, values: List[str]) -> int:
-        """Score a row on how many of its cells look like known column headers."""
-        all_candidates = (ACTIVITY_CANDIDATES + FLOOR_CANDIDATES + TOWER_CANDIDATES +
-                          START_CANDIDATES + FINISH_CANDIDATES + PROGRESS_CANDIDATES +
-                          QTY_CANDIDATES + UOM_CANDIDATES + CONTRACTOR_CANDIDATES +
-                          REMARKS_CANDIDATES + ["s no", "sl no", "sr no", "sno", "serial"])
-        score = 0
-        for v in values:
-            norm = self._normalize_column_name(v)
-            if any(self._normalize_column_name(c) in norm or norm in self._normalize_column_name(c)
-                   for c in all_candidates):
-                score += 1
-        return score
+def get_cell_status(cell) -> tuple[str, int]:
+    """Returns (status, progress_percent) based on cell background color."""
+    fill = cell.fill
+    if fill and fill.fgColor and fill.fgColor.type == "rgb":
+        rgb = fill.fgColor.rgb.upper()
+        # Green = Completed
+        if any(rgb.startswith(g) for g in ["FF00B050", "FF92D050", "FF70AD47", "FF00FF00"]):
+            return "completed", 100
+        # Yellow = In Progress
+        if any(rgb.startswith(y) for y in ["FFFFFF00", "FFFFEB9C", "FFFFC000", "FFFFEB84"]):
+            return "in_progress", 50
+        # Red = Overdue
+        if any(rgb.startswith(r) for r in ["FFFF0000", "FFFF5050", "FFFF4040", "FFFF4B4B", "FFFF0000"]):
+            return "overdue", 0
+    return "not_started", 0
 
-    # ────────────────────────────────────────────────────────────────
-    # Content-based intelligent column detection
-    # ────────────────────────────────────────────────────────────────
-    def _infer_columns_from_content(
-        self,
-        df: pd.DataFrame,
-        mapping: Dict[str, Optional[str]],
-        used_cols: set,
-    ) -> Tuple[Dict[str, Optional[str]], List[str]]:
-        """Analyse actual cell values to fill unmapped columns."""
-        warnings: List[str] = []
-        available = [c for c in df.columns if c not in used_cols
-                     and not re.match(r"^(unnamed|col_?\d)", str(c), re.I)]
-        sample_size = min(60, len(df))
 
-        for col in available:
-            series = df[col].head(sample_size).dropna()
-            if series.empty:
+def _build_color_map(file_path: str) -> Dict[str, Dict[Tuple[int, int], str]]:
+    """Pre-pass: extract cell background colors keyed by (row, col) per sheet."""
+    wb = load_workbook(file_path, data_only=True)
+    color_map: Dict[str, Dict[Tuple[int, int], str]] = {}
+
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        sheet_colors: Dict[Tuple[int, int], str] = {}
+        for row in ws.iter_rows():
+            for cell in row:
+                status = _rgb_to_status(cell)
+                if status != "not_started":
+                    sheet_colors[(cell.row, cell.column)] = status
+        color_map[sheet_name] = sheet_colors
+
+    wb.close()
+    return color_map
+
+
+def _rgb_to_status(cell) -> str:
+    fill = cell.fill
+    if not fill or not fill.fgColor:
+        return "not_started"
+    
+    color_type = fill.fgColor.type
+    rgb = ""
+    
+    if color_type == "rgb":
+        rgb = fill.fgColor.rgb.upper()
+    elif color_type == "theme":
+        return "not_started"
+    
+    if not rgb or rgb in ("00000000", "FFFFFFFF", "FF000000"):
+        return "not_started"
+
+    # Green shades → Completed
+    if any(rgb.startswith(g) for g in [
+        "FF00B050", "FF92D050", "FF70AD47", "FF00FF00",
+        "FF548235", "FF375623", "FFA9D18E"
+    ]):
+        return "completed"
+
+    # Yellow shades → In Progress
+    if any(rgb.startswith(y) for y in [
+        "FFFFFF00", "FFFFEB9C", "FFFFC000", "FFFFEB84",
+        "FFFFD966", "FFFFCC00", "FFFF9900", "FFFFE699"
+    ]):
+        return "in_progress"
+
+    # Red shades → Overdue
+    if any(rgb.startswith(r) for r in [
+        "FFFF0000", "FFFF5050", "FFFF4040", "FFFF4B4B",
+        "FFC00000", "FF9C0006", "FFFF6666", "FFFF0000"
+    ]):
+        return "overdue"
+
+    return "not_started"
+
+
+def _status_to_progress(status: str) -> float:
+    return {"completed": 100.0, "in_progress": 50.0, "overdue": 0.0}.get(status, 0.0)
+
+
+def parse_excel(file_path: str, project_name_hint: str | None = None) -> dict:
+    wb = load_workbook(file_path, data_only=True)
+    
+    all_tasks = []
+    
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        
+        # Find header row (row 3 based on your Excel screenshot)
+        header_row_idx = 3
+        headers = []
+        for col in range(1, ws.max_column + 1):
+            val = ws.cell(row=header_row_idx, column=col).value
+            headers.append(str(val).strip() if val else f"col_{col}")
+
+        for row_idx in range(header_row_idx + 1, ws.max_row + 1):
+            floor_cell = ws.cell(row=row_idx, column=1)  # PATTY/FLOORS column
+            floor_val = floor_cell.value
+            if not floor_val:
                 continue
 
-            col_type = self._classify_column(series)
+            task_row = {
+                "floor": str(floor_val),
+                "tower": sheet_name,
+                "sub_tasks": []
+            }
 
-            if col_type == "date":
-                if not mapping["planned_start"]:
-                    mapping["planned_start"] = col
-                    used_cols.add(col)
-                    warnings.append(f"Detected date column '{col}' as Baseline Start (by content).")
-                elif not mapping["planned_finish"]:
-                    mapping["planned_finish"] = col
-                    used_cols.add(col)
-                    warnings.append(f"Detected date column '{col}' as Baseline Finish (by content).")
-            elif col_type == "floor":
-                if not mapping["floor"]:
-                    mapping["floor"] = col
-                    used_cols.add(col)
-                    warnings.append(f"Detected floor column '{col}' (by content).")
-            elif col_type == "tower":
-                if not mapping["tower"]:
-                    mapping["tower"] = col
-                    used_cols.add(col)
-                    warnings.append(f"Detected tower/block column '{col}' (by content).")
-            elif col_type == "activity":
-                if not mapping["activity"]:
-                    mapping["activity"] = col
-                    used_cols.add(col)
-                    warnings.append(f"Detected activity column '{col}' (by content).")
-            elif col_type == "progress":
-                if not mapping["progress"]:
-                    mapping["progress"] = col
-                    used_cols.add(col)
+            # Each column after first = a discipline/trade
+            for col_idx in range(2, len(headers) + 1):
+                cell = ws.cell(row=row_idx, column=col_idx)
+                status, progress = get_cell_status(cell)
+                date_val = cell.value
 
-        # Validate: if mapped floor column has garbage (large floats, etc.), unset it
-        if mapping["floor"]:
-            mapping["floor"] = self._validate_floor_column(df, mapping["floor"])
+                task_row["sub_tasks"].append({
+                    "name": headers[col_idx - 1],
+                    "planned_start": str(date_val) if date_val else None,
+                    "status": status,
+                    "progress_percent": progress,
+                })
 
-        return mapping, warnings
+            all_tasks.append(task_row)
 
-    def _classify_column(self, series: pd.Series) -> str:
-        """Classify a column's role by analysing its values."""
-        values = list(series)
-        non_null = [v for v in values if pd.notna(v)]
-        if not non_null:
-            return "unknown"
+    completed = sum(
+        1 for t in all_tasks
+        for s in t["sub_tasks"] if s["status"] == "completed"
+    )
+    in_progress = sum(
+        1 for t in all_tasks
+        for s in t["sub_tasks"] if s["status"] == "in_progress"
+    )
+    overdue = sum(
+        1 for t in all_tasks
+        for s in t["sub_tasks"] if s["status"] == "overdue"
+    )
+    total = sum(len(t["sub_tasks"]) for t in all_tasks)
 
-        # ── Date detection ──
-        date_count = 0
-        for v in non_null[:40]:
-            try:
-                if isinstance(v, (pd.Timestamp,)):
-                    date_count += 1
-                elif isinstance(v, str) and re.search(r"\d{1,4}[-/]\d{1,2}[-/]\d{1,4}", v):
-                    date_count += 1
-                elif hasattr(v, "year"):
-                    date_count += 1
-                else:
-                    pd.to_datetime(v)
-                    date_count += 1
-            except Exception:
-                pass
-        if date_count / max(len(non_null[:40]), 1) > 0.5:
-            return "date"
-
-        # ── Numeric percentage (progress) ──
-        pct_count = 0
-        for v in non_null[:40]:
-            try:
-                f = float(str(v).replace("%", "").strip())
-                if 0 <= f <= 100:
-                    pct_count += 1
-            except Exception:
-                pass
-        if pct_count / max(len(non_null[:40]), 1) > 0.7:
-            # Distinguish: if most values are 0-100 with high density, it's progress
-            return "progress"
-
-        # ── Floor detection: small ints, or strings like "Floor 3", "Level 2", "B1" ──
-        floor_pat = re.compile(
-            r"^(floor|level|lvl|storey|basement|b|g|ground|roof|terrace|podium|mezzanine)"
-            r"|\bfloor\b|\blevel\b|\blvl\b",
-            re.I,
-        )
-        floor_count = 0
-        for v in non_null[:40]:
-            s = str(v).strip()
-            if floor_pat.search(s):
-                floor_count += 1
-            elif re.fullmatch(r"-?\d{1,2}", s):  # small ints like 1-30
-                floor_count += 1
-        if floor_count / max(len(non_null[:40]), 1) > 0.4:
-            return "floor"
-
-        # ── Tower/block detection: single capital letters, "Tower-A", "Block 1" ──
-        tower_pat = re.compile(r"^(tower|block|wing|bldg|building)\b", re.I)
-        tower_count = 0
-        for v in non_null[:40]:
-            s = str(v).strip()
-            if tower_pat.search(s):
-                tower_count += 1
-            elif re.fullmatch(r"[A-Z]", s):
-                tower_count += 1
-        if tower_count / max(len(non_null[:40]), 1) > 0.3:
-            return "tower"
-
-        # ── Activity/description: long strings, high uniqueness ──
-        str_vals = [str(v).strip() for v in non_null if isinstance(v, str) and len(str(v).strip()) > 3]
-        if len(str_vals) >= 3:
-            avg_len = sum(len(s) for s in str_vals) / len(str_vals)
-            unique_ratio = len(set(str_vals)) / len(str_vals)
-            if avg_len > 8 and unique_ratio > 0.3:
-                return "activity"
-
-        return "unknown"
-
-    def _validate_floor_column(self, df: pd.DataFrame, col: str) -> Optional[str]:
-        """Return None if the mapped floor column contains implausible values (big floats, etc.)."""
-        sample = df[col].dropna().head(30)
-        bad_count = 0
-        for v in sample:
-            s = str(v).strip()
-            try:
-                f = float(s)
-                if abs(f) > 200 or (f != int(f) and abs(f) > 30):
-                    bad_count += 1
-            except ValueError:
-                pass  # string is fine
-        if bad_count / max(len(sample), 1) > 0.3:
-            return None  # unset — this isn't a floor column
-        return col
-
-    def _guess_activity_column(self, df: pd.DataFrame, exclude: Optional[set] = None) -> Optional[str]:
-        """Pick the column with the most non-null unique text values (likely the activity column)."""
-        skip_patterns = re.compile(r"^(unnamed|col_?\d|s\s*no|sl\s*no|sr\s*no|sno|serial)", re.I)
-        exclude = exclude or set()
-        best_col: Optional[str] = None
-        best_score = 0.0
-        for col in df.columns:
-            if col in exclude:
-                continue
-            if skip_patterns.search(str(col)):
-                continue
-            series = df[col].dropna()
-            if series.empty:
-                continue
-            # Must be mostly strings (not numbers/dates), at least 4 chars long
-            str_count = sum(1 for v in series if isinstance(v, str) and len(v.strip()) > 3)
-            if str_count < 3:
-                continue
-            unique_ratio = series.nunique() / max(len(series), 1)
-            avg_len = sum(len(str(v)) for v in series if isinstance(v, str)) / max(str_count, 1)
-            # Score favours: many unique long text strings
-            score = str_count * unique_ratio * min(avg_len / 10, 3.0)
-            if score > best_score:
-                best_score = score
-                best_col = col
-        # Only accept if we got a reasonable score
-        if best_col and best_score >= 3:
-            return best_col
-        return None
-
-    def _pick(self, cols: Dict[str, str], candidates: List[str]) -> Optional[str]:
-        for candidate in candidates:
-            norm = self._normalize_column_name(candidate)
-            if norm in cols:
-                return cols[norm]
-        for norm_col, original in cols.items():
-            if any(candidate in norm_col for candidate in map(self._normalize_column_name, candidates)):
-                return original
-        return None
-
-    def _normalize_column_name(self, value: Any) -> str:
-        return re.sub(r"[^a-z0-9%]+", " ", str(value).lower()).strip()
-
-    def _tower_from_sheet(self, sheet_name: str) -> Optional[str]:
-        name = sheet_name.strip()
-        if re.search(r"(^|\b)(tower|block|wing)[-\s]?[a-z0-9]+", name, re.I):
-            return name
-        return None
-
-    def _normalize_floor(self, value: Optional[str]) -> Optional[str]:
-        if not value:
-            return None
-        s = value.strip()
-        # Reject obvious non-floor values: large numbers, decimals, etc.
-        try:
-            f = float(s)
-            if f != int(f) or abs(f) > 200:
-                return None  # 9901.96, 8300.5 etc. aren't floors
-            n = int(f)
-            if 0 <= n <= 200:
-                return f"Floor {n}"
-            return None
-        except ValueError:
-            pass
-        # Already a reasonable string like "Floor 3", "Basement", etc.
-        if re.fullmatch(r"\d{1,3}", s):
-            return f"Floor {s}"
-        return s
-
-    def _normalize_activity(self, activity: str) -> str:
-        return re.sub(r"\s+", " ", activity).strip().title()
-
-    def _slug(self, text: str) -> str:
-        return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:80]
-
-    def _clean(self, value: Any) -> Optional[str]:
-        if pd.isna(value):
-            return None
-        text = str(value).strip()
-        return text or None
-
-    def _dateish(self, value: Any) -> Optional[str]:
-        if value is None or pd.isna(value):
-            return None
-        try:
-            return pd.to_datetime(value).date().isoformat()
-        except Exception:
-            return str(value)
-
-    def _progressish(self, value: Any) -> Optional[float]:
-        if value is None or pd.isna(value):
-            return None
-        if isinstance(value, str):
-            value = value.replace("%", "").strip()
-        try:
-            progress = float(value)
-            if progress <= 1:
-                progress *= 100
-            return round(max(0.0, min(progress, 100.0)), 2)
-        except Exception:
-            return None
-
-    def _floatish(self, value: Any) -> Optional[float]:
-        if value is None or pd.isna(value):
-            return None
-        try:
-            return float(value)
-        except Exception:
-            return None
-
-    def _looks_like_milestone(self, activity: str, start: Optional[str], finish: Optional[str]) -> bool:
-        name = activity.lower()
-        if any(k in name for k in MILESTONE_HINTS):
-            return True
-        return bool(start and finish and start == finish)
-
-    def _infer_phase(self, activity: str) -> str:
-        name = activity.lower()
-        for phase, keywords in PHASE_RULES.items():
-            if any(k in name for k in keywords):
-                return phase
-        return "unknown"
-
-    def _infer_discipline(self, activity: str) -> str:
-        name = activity.lower()
-        for discipline, keywords in DISCIPLINE_RULES.items():
-            if any(k in name for k in keywords):
-                return discipline
-        return "unknown"
-
-
-def parse_excel(file_path: str, project_name_hint: Optional[str] = None) -> dict[str, Any]:
-    service = ExcelNormalizationService()
-    preview = service.parse_workbook(file_path, project_name_hint=project_name_hint)
-    return preview.model_dump(mode="json")
+    return {
+        "project_name": project_name_hint or wb.active.title,
+        "tasks": all_tasks,
+        "summary": {
+            "total": total,
+            "completed": completed,
+            "in_progress": in_progress,
+            "overdue": overdue,
+            "not_started": total - completed - in_progress - overdue,
+        },
+        "warnings": []
+    }
